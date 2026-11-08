@@ -6,14 +6,20 @@
 
 SkyDek DJ is a standalone Windows DJ application by **New Ground Enterprise**, designed for mixing local music with an Xbox controller or standard mouse controls. Browse tracks, control two decks, trigger sound effects, and record your mix from one dark, focused workspace.
 
-**Version 0.6.0 · Windows x64 · Preview release**
+**Version 0.7.0 · Windows x64 · Preview release**
+
+## New in 0.7.0
+
+A cleaner workspace with matte graphite panels, restrained purple accents, clearer library text, compact effect groups, a collapsible controller guide, and matching settings. The existing controller mappings and sampler playback modes carry forward.
+
+[Get the complete Windows download package](https://github.com/NewGrndCo/SkyDek-DJ/releases/tag/v0.7.0).
 
 ## Download and install
 
-1. [Download the Windows setup file](./SkyDek-DJ-0.6.0-Windows-Setup.exe). On GitHub's file page, use **Download raw file** if a download does not start.
+1. [Download the Windows setup file](./SkyDek-DJ-0.7.0-Windows-Setup.exe). On GitHub's file page, use **Download raw file** if a download does not start.
 2. If you downloaded this repository as a ZIP, extract it first.
 3. Exit an older SkyDek instance using **Exit** in its system-tray menu. Closing its window alone leaves it running.
-4. Run **SkyDek-DJ-0.6.0-Windows-Setup.exe** and follow the installer.
+4. Run **SkyDek-DJ-0.7.0-Windows-Setup.exe** and follow the installer.
 5. Open **SkyDek DJ** from the Start menu or your installed shortcut.
 
 This repository distributes the ready-to-install application, not its proprietary source code. No terminal commands or development tools are needed.
@@ -99,10 +105,10 @@ The preview installer is not digitally signed. Verify the download source and ch
 
 ## Download verification
 
-SHA-256 for **SkyDek-DJ-0.6.0-Windows-Setup.exe**:
+SHA-256 for **SkyDek-DJ-0.7.0-Windows-Setup.exe**:
 
 ```text
-23069c850d3250173ca34b529ab7602484b84de23d3834e66da3761c39b4a634
+219f120ee1db778464cd98adbd467172409ca029d2bc42d13000fa1c5673066d
 ```
 
 ## About this distribution
