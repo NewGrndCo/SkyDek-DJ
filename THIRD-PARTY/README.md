@@ -1,3 +1,3 @@
-# Third-party components
+# Third-party materials
 
-NOTICES.txt contains upstream license and attribution texts for resolved dependencies. MPL-DEPENDENCY-SOURCES.zip contains the unmodified MPL-licensed dependency source used by this build. It contains no proprietary SkyDek application source. Microsoft WebView2 is supplied by Microsoft under its own terms; the setup program downloads it only when needed.
+NOTICES.txt inventories resolved Windows main dependencies, frontend runtime dependencies and the separate encoder. MPL-DEPENDENCY-SOURCES.zip supplies main MPL dependency source. SkyDek-MP3-Encoder-0.9.1-Source.zip supplies complete helper source, locked vendor tree and native LAME source. These materials do not license proprietary application source or branding.

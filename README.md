@@ -1,118 +1,85 @@
-<p align="center"><img src="assets/brand.png" width="88" alt="SkyDek logo"></p>
+<p align="center"><img src="assets/brand.png" width="100" alt="SkyDek logo"></p>
 
 # SkyDek DJ
 
 **Your music. Your controller. Your mix.**
 
-SkyDek DJ is a standalone Windows DJ application by **New Ground Enterprise**, designed for mixing local music with an Xbox controller or standard mouse controls. Browse tracks, control two decks, trigger sound effects, and record your mix from one dark, focused workspace.
+SkyDek DJ is a standalone Windows DJ application by **New Ground Enterprise**. Mix local music with an Xbox controller or your mouse, trigger sound effects, and record your mix in one focused workspace.
 
-**Version 0.7.0 · Windows x64 · Preview release**
+**0.9.1 · Windows x64 · Preview**
 
-## New in 0.7.0
+## Download
 
-A cleaner workspace with matte graphite panels, restrained purple accents, clearer library text, compact effect groups, a collapsible controller guide, and matching settings. The existing controller mappings and sampler playback modes carry forward.
+**[Download the Windows installer](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.9.1/SkyDek-DJ-0.9.1-Windows-Setup.exe)**
 
-[Get the complete Windows download package](https://github.com/NewGrndCo/SkyDek-DJ/releases/tag/v0.7.0).
+[Get the complete ZIP package](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.9.1/SkyDek-DJ-0.9.1-Windows.zip) · [Release notes](https://github.com/NewGrndCo/SkyDek-DJ/releases/tag/v0.9.1)
 
-## Download and install
+Run the installer, then open **SkyDek DJ**. An Xbox controller is optional; pair it with Windows over Bluetooth or connect it by USB. Microsoft WebView2 is required; setup downloads it if missing. **VirtualDJ, loopMIDI and a separate MIDI driver are not required.**
 
-1. [Download the Windows setup file](./SkyDek-DJ-0.7.0-Windows-Setup.exe). On GitHub's file page, use **Download raw file** if a download does not start.
-2. If you downloaded this repository as a ZIP, extract it first.
-3. Exit an older SkyDek instance using **Exit** in its system-tray menu. Closing its window alone leaves it running.
-4. Run **SkyDek-DJ-0.7.0-Windows-Setup.exe** and follow the installer.
-5. Open **SkyDek DJ** from the Start menu or your installed shortcut.
+Updating? Stop recording and exit SkyDek through its system-tray menu before running setup. Existing library references and mapping profiles are retained. The preview installer is unsigned; download only from this repository and compare the supplied SHA-256 checksums.
 
-This repository distributes the ready-to-install application, not its proprietary source code. No terminal commands or development tools are needed.
+## What you can do
 
-### Requirements and dependencies
+- Mix two decks with level, tempo, filter and crossfader controls.
+- Analyze your library for durations and estimated BPM before playback; use **SYNC** to match one deck's tempo to the other.
+- Drag waveforms to seek, zoom with the wheel or +/−, and place a main cue and three hot cues.
+- Trigger backspin, brake, brake start, echo and reverb. **FX Mix** adjusts effect intensity.
+- Arrange sixteen sampler pads with Restart, Toggle, Overlap or Hold playback.
+- Record the stereo master as **WAV** or **320 kbps MP3**.
+- Save controller mapping profiles, resize the library panels, and switch between dark and light appearance.
 
-- A 64-bit Windows PC. Windows 11 is recommended; this is not a macOS, Linux, or Windows ARM64 build.
-- Microsoft Edge **WebView2 Runtime**. Setup detects it and downloads/installs it if absent, so allow an internet connection during first installation. A full offline runtime is not included. [Microsoft's official WebView2 download](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
-- A working Windows audio output. External audio interfaces need their manufacturer's Windows drivers.
-- Optional: an Xbox Series or other XInput-compatible controller, paired in Windows over Bluetooth or connected with a data-capable USB cable. Mouse controls work without a controller.
-- Your own WAV or MP3 music and sound effects. No music or sample library is included.
+## Get started
 
-**loopMIDI, VirtualDJ, a virtual MIDI driver, Node.js, Rust, and Visual Studio are not required.** This standalone application controls its own audio; it does not use the older SkyDek Mapper-to-VirtualDJ setup. All application components are included in setup, except Microsoft's automatically downloaded runtime and any hardware-specific drivers.
+1. Choose **Import folder** or **Import tracks**. Your music stays in its original location. Use the folder tree and search to browse it.
+2. Let **Analyze library** finish; the toolbar shows progress and can pause the scan. General settings offers a full rescan.
+3. Load a song using its **1** or **2** button. Use Play to start, and adjust levels and the crossfader.
+4. **CUE** previews from the main cue mark. Release before the configured hold time to return and pause; hold until the threshold, then release to keep playing. Use **SET CUE** to move the mark.
+5. Open **Sampler settings / Add sounds**, choose your SFX folder, select a sound and assign it to a pad or add it to the next empty pad. Drag assigned pads to rearrange them.
+6. Select **WAV** or **MP3** above Record, choose a destination, and stop recording to finalize the file. MP3 support is bundled and runs in the background.
 
-## Make your first mix
+## Xbox quick guide
 
-1. Choose **Import folder** in Browser, select your music folder, and navigate its subfolders on the left. The adjacent library shows tracks in the selected folder.
-2. Use a track's **1** or **2** button to load a deck. Press its Play button to begin. Use **CUE** to return to the cue mark; click a waveform to seek and **SET CUE** to place the cue there.
-3. Load a second track into the other deck. Adjust deck levels and the crossfader to transition between them.
-4. Hold a deck effect button while you want the effect active; release to disengage it. Active effects highlight.
-5. **RECORD WAV** chooses a destination for recording the master mix. Stop recording to finalize the WAV file before exiting.
-
-Playing decks are protected from accidental controller loads. Choose the deck with the mouse and confirm if you intentionally want to replace a playing track.
-
-## Xbox controls — default Normal layer
-
-| Control | Action |
+| Input | Default action |
 |---|---|
-| A | Load highlighted track into a preparation deck |
-| B | Cue preview; hold for the configured time, then release to keep playing |
-| X | Load the next Sidelist track |
-| Y | Add highlighted track to Sidelist |
-| D-pad left / right | Move focus between Folders, Library, and Sampler |
-| D-pad up / down | Browse the focused panel |
-| Left stick | Slide the crossfader; release to keep its position |
-| L3 — click left stick | Automatic crossfade to the opposite side |
-| Right stick horizontal / vertical | Target deck filter / effect mix |
-| R3 — click right stick | Trigger the highlighted sampler pad |
-| LB / RB | Hold backspin / brake effect |
-| Menu | Change target deck |
-| View — overlapping squares | Toggle Normal / Shift layer |
+| D-pad | Browse folders/songs and move between bottom panels; within the sampler, navigate the 4×4 pad grid |
+| D-pad left at sampler's first column | Return to the library; Shift+left also changes panels |
+| A | Load the selected song into the preparation deck |
+| B | Cue preview; hold for the configured duration and release to keep playing |
+| X / Y | Load next Sidelist song / add selected song to Sidelist |
+| Left stick horizontal / L3 | Crossfader / automatic crossfade |
+| Right stick horizontal / vertical | Filter / effect mix |
+| R3 | Trigger the selected sampler pad |
+| LB / RB | Hold backspin / brake |
+| Menu / View | Select target deck / toggle Shift layer |
+| Shift+X | Sync target deck tempo to the other deck |
 
-Shift provides alternate assignments, including explicit deck loading, echo, reverb, tempo matching, and next-sample selection. Check **Settings → SkyDek Mapper** to see or change either layer, save mappings, and manage named profiles. Existing users may have different saved assignments. The Xbox **Share** button is reserved by Windows and is not used as the Shift button.
+Saved custom mappings take precedence. **Settings → SkyDek Mapper** shows live input and lets you edit and save profiles. The Xbox Share button is reserved by Windows. Center both sticks after reconnecting.
 
-After clicking L3/R3 or reconnecting, return that stick to center to re-enable its analog movement. Battery level appears only when reported by Windows and is approximate.
+## Sampler modes
 
-## Add and trigger sound effects
-
-1. In **SAMPLER**, select a pad and open **Sampler settings / Add sounds**.
-2. Choose **Open SFX folder**, then browse or search your WAV/MP3 effects.
-3. **Add** fills the next empty pad. **To selected pad** assigns to the chosen pad. You can also assign an individual audio file or clear the selected pad.
-4. Choose a **Pad playback mode**. It saves automatically; **Apply this mode to all pads** applies it to the entire bank.
-5. Return with **Back to sound pads**. Click a pad, or highlight it with the controller and press R3. Drag assigned pads to rearrange them; occupied pads swap.
-
-| Mode | How it plays |
+| Mode | Behavior |
 |---|---|
-| **Restart — default** | Tap once to play through. Every new press restarts it from the beginning. |
-| **Toggle** | Press once to play; press again to stop. |
-| **Overlap** | Every press adds another hit, up to eight simultaneous hits per pad. |
-| **Hold** | Plays while held; release stops it. |
+| Restart | Tap to play through; every press restarts from the beginning |
+| Toggle | Press to play, press again to stop |
+| Overlap | Each press adds another hit, up to eight simultaneous hits per pad |
+| Hold | Plays while held and stops on release |
 
-Pads highlight while their audio is active. **Stop all samples** silences the bank. Changing a mode stops the affected pad. Keep imported files in their original locations so saved assignments can find them next time.
+Names and assignments refer to the original sound files. Keep those files in place. **Stop all samples** silences the bank. Modes save automatically.
 
-## Settings and shortcuts
+## Settings and troubleshooting
 
-- **Settings → General:** choose an audio output, set cue hold time, and adjust stick sensitivity and automatic-crossfade duration. Applying an audio-device change saves the session and restarts the app; stop recording first.
-- **Settings → SkyDek Mapper:** live Xbox feedback, Normal/Shift assignments, and saved mapping profiles.
-- **F11** or the fullscreen button: toggle fullscreen. **Space:** deck play/pause. **C:** cue preview.
-- Closing the window keeps SkyDek running in the tray. Use the tray's **Show** or **Exit** commands.
+General settings includes audio output selection, cue hold time, stick sensitivity and automatic-crossfade duration. Changing output saves the session and restarts the app. **F11** toggles fullscreen; **Space** toggles playback; **C** previews cue. Closing the window keeps SkyDek in the tray; use **Exit** there to quit completely.
 
-## Preview notes and troubleshooting
+- **No sound:** check the chosen output, Windows volume, Master/deck levels and crossfader.
+- **Controller not responding:** check live input in Mapper settings, the active profile and Normal/Shift layer. Try USB if Bluetooth is unreliable.
+- **Missing sample:** reassign the original file or restore its location.
+- **BPM blank or unexpected:** rescan the library. Estimates can be unavailable or half/double tempo. Sync matches tempo, not beat phase; tempo changes also change pitch.
+- **Unreadable file:** the MP3 packet-recovery fix handles isolated damaged frames. A web page saved with an MP3 extension is not audio; download the actual audio file.
 
-This is an early preview, not a finished professional-performance release. Automatic BPM analysis, phase synchronization, and stems separation are not available. Enter BPM manually for tempo matching/beat loops; tempo changes also change pitch. Separate headphone cueing is not available. Test your controller, output, samples, and recording before relying on a live set.
+This preview does not provide stems separation, automatic downbeat/phase sync, pitch-preserving time stretch or separate headphone cueing. Playback loads tracks into memory and currently limits individual loaded tracks to thirty minutes. Test your controller, output, samples and recording before a live set. Report reproducible issues with your app/Windows version; never upload private music or session files.
 
-- **Controller not responding:** confirm Windows sees the controller, power it on, center both sticks, and inspect live input in Mapper settings. Confirm the active profile and Normal/Shift layer. Try USB if Bluetooth is unreliable.
-- **No sound:** check Master/deck levels, crossfader, Windows output volume, and the selected device. Refresh the output list after connecting an interface, then apply the output and restart.
-- **A sample needs a hold:** select that pad's **Restart** mode, or apply it to all pads.
-- **A sample is missing:** locate the original file or assign it again. Pads become available after their audio has loaded.
-- **Setup cannot install WebView2:** install the Evergreen Runtime from Microsoft's official page, then rerun SkyDek setup.
-- **Reporting a problem:** use this repository's Issues tab when enabled. Include your SkyDek version, Windows version, connection type, and clear steps to reproduce. Do not upload private music, recordings, or personal session files.
+## About this download
 
-The preview installer is not digitally signed. Verify the download source and checksum before deciding whether to run a publisher-warning prompt.
+SkyDek DJ application and branding © 2026 New Ground Enterprise. **Proprietary application source is not included.** The separate MP3 utility's complete source, vendored dependencies, build instructions and licenses are supplied under **THIRD-PARTY**. Only that utility's authored source is MIT licensed; dependencies retain their respective licenses. See **SOURCE-CODE-LICENSE.md**, **THIRD-PARTY/NOTICES.txt** and **SHA256SUMS.txt**.
 
-## Download verification
-
-SHA-256 for **SkyDek-DJ-0.7.0-Windows-Setup.exe**:
-
-```text
-219f120ee1db778464cd98adbd467172409ca029d2bc42d13000fa1c5673066d
-```
-
-## About this distribution
-
-SkyDek DJ application and branding © 2026 New Ground Enterprise. Proprietary application source is not included or licensed as open source. Third-party components retain their respective licenses; notices and applicable dependency source are in **THIRD-PARTY**. SkyDek DJ is an independent application and is not affiliated with Microsoft, Xbox, or VirtualDJ.
-
-Package contents: Windows setup, this guide, brand asset, third-party notices, and dependency source required for those notices. No personal library, recordings, credentials, internal build documents, or application source is included.
+SkyDek DJ is independent and is not affiliated with Microsoft, Xbox or VirtualDJ. No personal music, recordings, credentials or session data is included.
