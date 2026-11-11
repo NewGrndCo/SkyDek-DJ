@@ -6,13 +6,13 @@
 
 SkyDek DJ is a standalone Windows DJ application by **New Ground Enterprise**. Mix local music with an Xbox controller or your mouse, trigger sound effects, and record your mix in one focused workspace.
 
-**0.9.1 · Windows x64 · Preview**
+**0.10.0 · Windows x64 · Preview**
 
 ## Download
 
-**[Download the Windows installer](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.9.1/SkyDek-DJ-0.9.1-Windows-Setup.exe)**
+**[Download the Windows installer](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.10.0/SkyDek-DJ-0.10.0-Windows-Setup.exe)**
 
-[Get the complete ZIP package](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.9.1/SkyDek-DJ-0.9.1-Windows.zip) · [Release notes](https://github.com/NewGrndCo/SkyDek-DJ/releases/tag/v0.9.1)
+[Get the complete ZIP package](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.10.0/SkyDek-DJ-0.10.0-Windows.zip) · [Release notes](https://github.com/NewGrndCo/SkyDek-DJ/releases/tag/v0.10.0)
 
 Run the installer, then open **SkyDek DJ**. An Xbox controller is optional; pair it with Windows over Bluetooth or connect it by USB. Microsoft WebView2 is required; setup downloads it if missing. **VirtualDJ, loopMIDI and a separate MIDI driver are not required.**
 
@@ -28,13 +28,22 @@ Updating? Stop recording and exit SkyDek through its system-tray menu before run
 - Record the stereo master as **WAV** or **320 kbps MP3**.
 - Save controller mapping profiles, resize the library panels, and switch between dark and light appearance.
 
+## New in 0.10.0
+
+- **MIDI Controllers** in Settings supports USB MIDI Note and absolute CC controls. Select your device, connect, then choose Auto Map. Saved profiles restore on reconnect, and MIDI Learn guides setup for unfamiliar hardware.
+- **Deck lighting** shows playback, crossfade balance and track completion. Appearance includes reduced motion and Dark, Light and Xbox skins.
+- **Auto DJ** crossfades between imported tracks in the playing track's folder. Set the fade timing in General Settings.
+- Settings now uses a sidebar, and the sampler has a compact settings panel.
+
+Hardware support varies by model. HID controls and proprietary jog wheels, LEDs and displays need model-specific support. Physical MIDI devices were unavailable during verification.
+
 ## Get started
 
 1. Choose **Import folder** or **Import tracks**. Your music stays in its original location. Use the folder tree and search to browse it.
 2. Let **Analyze library** finish; the toolbar shows progress and can pause the scan. General settings offers a full rescan.
 3. Load a song using its **1** or **2** button. Use Play to start, and adjust levels and the crossfader.
 4. **CUE** previews from the main cue mark. Release before the configured hold time to return and pause; hold until the threshold, then release to keep playing. Use **SET CUE** to move the mark.
-5. Open **Sampler settings / Add sounds**, choose your SFX folder, select a sound and assign it to a pad or add it to the next empty pad. Drag assigned pads to rearrange them.
+5. Open **Sampler settings**, choose your SFX folder, select a sound and assign it to a pad or add it to the next empty pad. Drag assigned pads to rearrange them.
 6. Select **WAV** or **MP3** above Record, choose a destination, and stop recording to finalize the file. MP3 support is bundled and runs in the background.
 
 ## Xbox quick guide
