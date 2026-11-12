@@ -9,5 +9,6 @@ if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);
 const output = path.join(root, 'src-tauri/resources/encoder');
 mkdirSync(output, { recursive: true });
-copyFileSync(path.join(root, 'encoder-helper/target/release/skydek-mp3-encoder.exe'), path.join(output, 'skydek-mp3-encoder.exe'));
+const binary = process.platform === 'win32' ? 'skydek-mp3-encoder.exe' : 'skydek-mp3-encoder';
+copyFileSync(path.join(root, 'encoder-helper/target/release', binary), path.join(output, binary));
 console.log('Bundled MP3 encoder prepared.');

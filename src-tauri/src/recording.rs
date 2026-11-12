@@ -21,11 +21,12 @@ struct Mp3Process {
 }
 impl Mp3Process {
     fn create(path: &Path, rate: u32) -> Result<Self, String> {
+        let encoder_name = if cfg!(windows) { "skydek-mp3-encoder.exe" } else { "skydek-mp3-encoder" };
         let installed = std::env::current_exe()
             .map_err(|e| e.to_string())?
             .parent()
             .ok_or("Executable has no parent")?
-            .join("resources/encoder/skydek-mp3-encoder.exe");
+            .join(format!("resources/encoder/{encoder_name}"));
         let executable = if let Some(explicit) = std::env::var_os("SKYDEK_ENCODER_PATH") {
             let explicit = PathBuf::from(explicit);
             if !explicit.is_absolute() {
@@ -38,7 +39,7 @@ impl Mp3Process {
             #[cfg(debug_assertions)]
             {
                 Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("resources/encoder/skydek-mp3-encoder.exe")
+                    .join(format!("resources/encoder/{encoder_name}"))
             }
             #[cfg(not(debug_assertions))]
             {
