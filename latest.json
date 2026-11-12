@@ -1,0 +1,11 @@
+{
+  "version": "0.10.1",
+  "notes": "Signed SkyDek DJ 0.10.1 update with Matrix skin, 48 sampler slots, sampler volume, and updater support.",
+  "pub_date": "2026-11-12T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTmhDejQyN1RCVVdPWlhqWmh3KzBIMEdXVEhITXU3ZS8vWXhuYjdVbEcxY2JUOTVOaHM1ay95SXBqNzNwTnVEaXk5L1JTYkVQTFl2bW9GajJCeVQwSU1WK25YSnI1L2dRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDYzMzE4CWZpbGU6U2t5RGVrIERKXzAuMTAuMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MC4xMC4xCjB1bi9tUkpxdTVXeElwRnBTMmVEdy82Z1JPWGlVVlZNYmVjaE1kaHV4M0dVQk5lMGk4TW04dGRRRFE2Q24rOWVER25VT3IwYUNmdDU4a2dmWWo5L0RRPT0K",
+      "url": "https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.10.1/SkyDek.DJ_0.10.1_x64-setup.exe"
+    }
+  }
+}
