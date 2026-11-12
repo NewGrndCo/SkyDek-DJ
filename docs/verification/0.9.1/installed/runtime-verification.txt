@@ -1,0 +1,6 @@
+PASS WAV 1 decoded; duration=3; peaks=1412
+PASS WAV 2 decoded; duration=3; peaks=1412
+PASS two-deck master rendered and WAV recording re-decoded: 1 sec, peak 0.13160197
+PASS bundled MP3 utility encoded and finalized stereo master; re-decoded 1.032 sec
+PASS real output callback: Speakers (Realtek(R) Audio), 48000 Hz, clock=119136, deck positions=[2.481999999997567, 2.481999999997567]. Muted test; audible listening not verified.
+Controller observed connected=false; physical button demonstration pending

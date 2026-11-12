@@ -1,94 +1,81 @@
-<p align="center"><img src="assets/brand.png" width="100" alt="SkyDek logo"></p>
-
 # SkyDek DJ
 
-**Your music. Your controller. Your mix.**
+Standalone Windows DJ application by New Ground Enterprise. This is the private development workspace. Public installer/documentation distributions are assembled separately under release/. VirtualDJ and loopMIDI are not required.
 
-SkyDek DJ is a standalone Windows DJ application by **New Ground Enterprise**. Mix local music with an Xbox controller or your mouse, trigger sound effects, and record your mix in one focused workspace.
+Current local build: **0.9.1 preview**. See [0.9.1 update notes](docs/UPDATE-0.9.1.md). The full build contract remains in docs/BUILD-CONTRACT.txt; this preview is not a completed implementation of every contracted feature.
 
-**0.10.0 · Windows x64 · Preview**
+## Development and verification
 
-## Download
+Use Node.js with built-in TypeScript stripping support, Rust's Windows MSVC toolchain, Visual Studio C++ Build Tools, Windows SDK, and WebView2.
 
-**[Download the Windows installer](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.10.0/SkyDek-DJ-0.10.0-Windows-Setup.exe)**
+```text
+npm ci
+npm run desktop
+npm run build
+npm run test:ui
+npm run build:encoder
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+npm run package
+```
 
-[Get the complete ZIP package](https://github.com/NewGrndCo/SkyDek-DJ/releases/download/v0.10.0/SkyDek-DJ-0.10.0-Windows.zip) · [Release notes](https://github.com/NewGrndCo/SkyDek-DJ/releases/tag/v0.10.0)
+The Windows NSIS setup is built under src-tauri/target/release/bundle/nsis/. Application source and personal session files must not be copied into the public distribution.
 
-Run the installer, then open **SkyDek DJ**. An Xbox controller is optional; pair it with Windows over Bluetooth or connect it by USB. Microsoft WebView2 is required; setup downloads it if missing. **VirtualDJ, loopMIDI and a separate MIDI driver are not required.**
+## Music and library analysis
 
-Updating? Stop recording and exit SkyDek through its system-tray menu before running setup. Existing library references and mapping profiles are retained. The preview installer is unsigned; download only from this repository and compare the supplied SHA-256 checksums.
+Import WAV/MP3 tracks or a folder. Folder navigation shows direct files in the selected folder; All tracks removes the folder filter. Search narrows that selection.
 
-## What you can do
+New and existing unprocessed tracks are analyzed in a background worker before playback. Duration is decoded from the file and BPM is estimated. The toolbar shows progress and can pause/resume the scan. General settings can rescan all tracks. Results and file errors persist in the existing session. Manual BPM values saved by older versions are preserved; the manual entry box is no longer in the deck UI.
 
-- Mix two decks with level, tempo, filter and crossfader controls.
-- Analyze your library for durations and estimated BPM before playback; use **SYNC** to match one deck's tempo to the other.
-- Drag waveforms to seek, zoom with the wheel or +/−, and place a main cue and three hot cues.
-- Trigger backspin, brake, brake start, echo and reverb. **FX Mix** adjusts effect intensity.
-- Arrange sixteen sampler pads with Restart, Toggle, Overlap or Hold playback.
-- Record the stereo master as **WAV** or **320 kbps MP3**.
-- Save controller mapping profiles, resize the library panels, and switch between dark and light appearance.
+Approximate BPM values are marked with ~. Some music has no reliable estimate, and half/double tempo can occur. Tempo ticks do not establish downbeat phase. Tempo matching uses the known BPM values; it is not beat-phase sync, and tempo changes also change pitch.
 
-## New in 0.10.0
+## Decks and waveforms
 
-- **MIDI Controllers** in Settings supports USB MIDI Note and absolute CC controls. Select your device, connect, then choose Auto Map. Saved profiles restore on reconnect, and MIDI Learn guides setup for unfamiliar hardware.
-- **Deck lighting** shows playback, crossfade balance and track completion. Appearance includes reduced motion and Dark, Light and Xbox skins.
-- **Auto DJ** crossfades between imported tracks in the playing track's folder. Set the fade timing in General Settings.
-- Settings now uses a sidebar, and the sampler has a compact settings panel.
+Load a track using its 1 or 2 button, or use A on the controller for a preparation deck. Playing decks reject unconfirmed controller replacement; explicit mouse replacement requires confirmation.
 
-Hardware support varies by model. HID controls and proprietary jog wheels, LEDs and displays need model-specific support. Physical MIDI devices were unavailable during verification.
+Click a waveform to seek. Drag the stacked waveform or a deck waveform left/right to scrub its playhead. Use the wheel or −/+ controls to zoom. Stacked waveforms share a zoom span; deck overviews have independent zoom and a Fit action. Arrow keys move 50 ms on a focused waveform; Shift+arrow moves one second. SET CUE places the main cue mark at the current position. Three hot cue buttons set or recall marks; Shift-click clears with confirmation.
 
-## Get started
+B, keyboard C, and the on-screen CUE button preview from the cue mark. Release before the configured hold time to return and pause, or hold until the threshold and release to continue playback. General settings changes the threshold. Cue feedback uses a reserved layout slot. Space and Play toggle playback. Tempo and level are vertical controls with a tempo reset.
 
-1. Choose **Import folder** or **Import tracks**. Your music stays in its original location. Use the folder tree and search to browse it.
-2. Let **Analyze library** finish; the toolbar shows progress and can pause the scan. General settings offers a full rescan.
-3. Load a song using its **1** or **2** button. Use Play to start, and adjust levels and the crossfader.
-4. **CUE** previews from the main cue mark. Release before the configured hold time to return and pause; hold until the threshold, then release to keep playing. Use **SET CUE** to move the mark.
-5. Open **Sampler settings**, choose your SFX folder, select a sound and assign it to a pad or add it to the next empty pad. Drag assigned pads to rearrange them.
-6. Select **WAV** or **MP3** above Record, choose a destination, and stop recording to finalize the file. MP3 support is bundled and runs in the background.
+Effects are active while held; release disengages them. Backspin/brake can stop a deck as part of their effect. The effect/target captured at press is retained for release.
 
-## Xbox quick guide
+## Controller and mapping
 
-| Input | Default action |
-|---|---|
-| D-pad | Browse folders/songs and move between bottom panels; within the sampler, navigate the 4×4 pad grid |
-| D-pad left at sampler's first column | Return to the library; Shift+left also changes panels |
-| A | Load the selected song into the preparation deck |
-| B | Cue preview; hold for the configured duration and release to keep playing |
-| X / Y | Load next Sidelist song / add selected song to Sidelist |
-| Left stick horizontal / L3 | Crossfader / automatic crossfade |
-| Right stick horizontal / vertical | Filter / effect mix |
-| R3 | Trigger the selected sampler pad |
-| LB / RB | Hold backspin / brake |
-| Menu / View | Select target deck / toggle Shift layer |
-| Shift+X | Sync target deck tempo to the other deck |
+Default Normal assignments:
+- A: load selected track into preparation deck; B: cue hold; X: next Sidelist; Y: add to Sidelist.
+- D-pad left/right: Folders → Library → Sampler focus. In Sampler, all four directions navigate the 4×4 grid. Left from its first column returns to Library; Shift+left also changes panels. Up/down browses the other focused sections.
+- Left X: crossfader; L3: automatic crossfade; Right X/Y: filter/effect mix; R3: selected sampler.
+- LB/RB: backspin/brake; Menu: target deck; View: Shift toggle.
+- Shift includes explicit deck loading, echo/reverb, tempo matching, and next sample.
 
-Saved custom mappings take precedence. **Settings → SkyDek Mapper** shows live input and lets you edit and save profiles. The Xbox Share button is reserved by Windows. Center both sticks after reconnecting.
+Settings → SkyDek Mapper manages both mapping layers and saved named profiles. The live Xbox artwork highlights input. Saved user assignments override defaults. The Xbox Share button is reserved by Windows and is not exposed by XInput. Connection transport is not guessed. Battery is an approximate driver-reported level when available.
 
-## Sampler modes
+Stick-clicks suppress that stick's axes until released and centered. Center both sticks after reconnecting. Crossfader position stays where released. General settings configures stick sensitivity and automatic-crossfade duration.
 
-| Mode | Behavior |
-|---|---|
-| Restart | Tap to play through; every press restarts from the beginning |
-| Toggle | Press to play, press again to stop |
-| Overlap | Each press adds another hit, up to eight simultaneous hits per pad |
-| Hold | Plays while held and stops on release |
+## Sampler
 
-Names and assignments refer to the original sound files. Keep those files in place. **Stop all samples** silences the bank. Modes save automatically.
+The performance view contains sixteen pads with filenames and active audio feedback. Drag assigned tiles to move/swap. Sampler settings opens a separate dialog: select a target pad, choose its mode, and browse files through a folder dropdown and search. Select one file and use Assign to selected pad or Add to next empty. An individual file can also be assigned directly.
 
-## Settings and troubleshooting
+Restart is the default: a press starts/restarts playback and release does not stop it. Toggle alternates play/stop; Overlap layers up to eight hits per pad; Hold stops on release. Modes save automatically. Stop all samples clears active voices. Assignments reference original file paths; keep the source files in place. Background restoration does not steal pad selection or panel focus.
 
-General settings includes audio output selection, cue hold time, stick sensitivity and automatic-crossfade duration. Changing output saves the session and restarts the app. **F11** toggles fullscreen; **Space** toggles playback; **C** previews cue. Closing the window keeps SkyDek in the tray; use **Exit** there to quit completely.
+## Workspace, output, and recording
 
-- **No sound:** check the chosen output, Windows volume, Master/deck levels and crossfader.
-- **Controller not responding:** check live input in Mapper settings, the active profile and Normal/Shift layer. Try USB if Bluetooth is unreliable.
-- **Missing sample:** reassign the original file or restore its location.
-- **BPM blank or unexpected:** rescan the library. Estimates can be unavailable or half/double tempo. Sync matches tempo, not beat phase; tempo changes also change pitch.
-- **Unreadable file:** the MP3 packet-recovery fix handles isolated damaged frames. A web page saved with an MP3 extension is not audio; download the actual audio file.
+Drag the separator above the bottom row to resize all three panels' height together. Vertical separators adjust folder/sampler width and the library takes the remaining share. Keyboard arrows also adjust a focused separator. Layout proportions persist locally; General settings can reset them. The toolbar Dark mode switch changes between dark and light appearance and saves that preference.
 
-This preview does not provide stems separation, automatic downbeat/phase sync, pitch-preserving time stretch or separate headphone cueing. Playback loads tracks into memory and currently limits individual loaded tracks to thirty minutes. Test your controller, output, samples and recording before a live set. Report reproducible issues with your app/Windows version; never upload private music or session files.
+F11 or the header control toggles fullscreen. General settings selects Windows output devices; applying a different device saves the session and restarts the app. Connect external hardware and refresh the device list. Stop recording before changing outputs.
 
-## About this download
+Choose WAV (32-bit float stereo) or MP3 (320 kbps stereo), then Record to select a destination. Stop REC finalizes the master recording. MP3 encoding runs on the recording worker; no separate encoder installation is required. Closing the window saves and hides to tray; Tray Exit fully exits. Active recording must be stopped first.
 
-SkyDek DJ application and branding © 2026 New Ground Enterprise. **Proprietary application source is not included.** The separate MP3 utility's complete source, vendored dependencies, build instructions and licenses are supplied under **THIRD-PARTY**. Only that utility's authored source is MIT licensed; dependencies retain their respective licenses. See **SOURCE-CODE-LICENSE.md**, **THIRD-PARTY/NOTICES.txt** and **SHA256SUMS.txt**.
+## Data and limits
 
-SkyDek DJ is independent and is not affiliated with Microsoft, Xbox or VirtualDJ. No personal music, recordings, credentials or session data is included.
+The per-user application directory for com.newground.skydek-dj contains session.json. Library paths, queue, cues, mappings, sampler assignments/modes, analysis results, and preferences persist there. Panel proportions use the WebView's local storage. User audio is read-only.
+
+Analysis streams files without retaining full-song PCM. Playback still decodes full tracks into memory and rejects tracks longer than thirty minutes. Unassigned decoded cache entries are pruned on subsequent decodes. Controller-triggered track loading still runs on the input worker and can delay input during a new decode. Separate headphone cueing, automatic downbeat/phase sync, pitch-preserving time stretch, and stems separation are unavailable.
+
+## Native audio verification
+
+```text
+src-tauri/target/release/skydek-dj.exe --verify "C:\\absolute\\verification-output"
+```
+
+This generates test tones, checks decoding, renders/records/re-decodes a mix, and runs the native output callback with the master muted. A fixture-deck-1.mp3 in the verification directory also exercises MP3 decoding. These tests do not certify listening quality or extended hardware performance. Runtime logs are written to the supplied directory.

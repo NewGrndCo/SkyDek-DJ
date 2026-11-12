@@ -1,0 +1,22 @@
+Tool: built-in image_gen. Reference assets: user-supplied SkyDek DJ screenshot and public/brand.png.
+
+Create a finished premium Instagram Story advertisement, portrait exact 9:16 aspect ratio, target 1080x1920 pixels, for the existing software brand SkyDek DJ.
+
+Use case: ads-marketing / compositing.
+Input image 1 is the REAL SOFTWARE SCREENSHOT and must be inserted as the actual screenshot, not used as inspiration to redraw a different interface. Preserve its complete landscape proportions, full two-deck layout, exact controls, actual logo, actual waveforms and all screen contents. Do not replace it with invented DJ software or fake dashboards. It should appear as one large sharp flat front-facing screenshot in the middle of the Story, nearly full width with modest margins, a thin violet rim and a subtle black shadow; no laptop or monitor hardware, no perspective warping, no cropping away parts of the software.
+Input image 2 is the actual approved SkyDek S-and-controller logo. Preserve this exact metallic silver angular S, integrated black gamepad, and purple tips. Use the center emblem as the small header brand mark, omitting only the outer square app-tile frame by framing/cropping. Do NOT invent a new S, gamepad silhouette or emblem. Brand name is precisely "SkyDek DJ", SkyDek silver/white italic and DJ violet, closely matching the supplied screenshot header. No spelling Skydeck, Skyy, Scott, or Mapper.
+
+Visual direction: match the ACTUAL screenshot identity exactly: near-black graphite background #090a0e, metallic white/silver typography, rich electric violet #a84aff accents, restrained cyan and muted red light accents echoing the two real decks. Disciplined professional software release campaign, polished typography, confident clean hierarchy, authentic product-first look. Restrained violet fine rules and soft atmospheric gradients only. No unrelated illustrations, no music festival visuals, no random controllers, no people, no stock photos, no extra invented logos. No fake software or UI imagery. Strong crisp legibility on a phone.
+
+Composition: top and bottom Story safe zones at least 200px. Centered brand lockup at top within safe area with exact supplied emblem and "SkyDek DJ". Beneath it a striking large two-line headline in bold slightly italic clean modern sans typography. Middle is the supplied screenshot as one intact large landscape rectangle, visually prominent and faithful. Beneath screenshot a concise benefit line and Windows-preview availability label. Bottom within safe area a striking violet call-to-action bar with large clear lettering. Fine understated "New Ground Enterprise" credit at bottom of content. All elements balanced and spacious, no clutter.
+
+Use only this promotional copy, verbatim and spelled accurately:
+"SkyDek DJ"
+"YOUR CONTROLLER."
+"YOUR MIX."
+"Two decks. Sound effects. Recording."
+"WINDOWS PREVIEW • v0.6.0"
+"COMMENT DJ FOR THE LINK"
+"New Ground Enterprise"
+
+Do not claim stems, automatic sync, professional production readiness, wireless transport state, or other unsupported features. Do not add a website address, price, QR code, hashtags, extra captions, or invented badges. Final image is the actual Story artwork, edge to edge, without a presentation mockup. Preserve source assets faithfully.

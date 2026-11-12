@@ -1,0 +1,374 @@
+SKYDEK DJ — BUILD CONTRACT
+
+ROLE AND OBJECTIVE
+
+Act as the senior desktop application engineer for New Ground Enterprise.
+
+Build SkyDek DJ: a standalone Windows DJ application controlled equally through an Xbox Series controller and ordinary mouse/keyboard interaction.
+
+Use the attached approved image as the visual target. Deliver functioning DJ software with real audio processing, persistent state, and verified controller operation.
+
+This contract authorizes implementation, local testing, and installer creation. It does not authorize publishing, purchases, or changes to VirtualDJ, its licensing, or its configuration.
+
+PRODUCT IDENTITY
+
+Application name: SkyDek DJ
+Developer: New Ground Enterprise
+Platform: Windows 11, x64
+Brand: black/charcoal surfaces, metallic silver, restrained violet accents, lime status indicators.
+Deck identities: cyan Deck 1, red Deck 2.
+
+Use existing authorized SkyDek artwork where available.
+
+REFERENCE AND REPOSITORY RULES
+
+1. Inspect the workspace, AGENTS.md, dependencies, existing controller code, assets, and build configuration before editing.
+2. Preserve the existing SkyDek Mapper application and user changes.
+3. Create SkyDek DJ as a separate application/project unless an existing dedicated SkyDek DJ project is found.
+4. The current Mapper workspace is:
+   C:\Users\New Ground\SkyDek
+5. Reuse verified controller and branding components deliberately. Do not assume the existing MIDI architecture is appropriate for standalone audio.
+6. Treat the approved image as the layout and styling reference, not as a screenshot to place behind controls.
+7. Resolve decorative or ambiguous labels into clear, working UI.
+8. Do not copy VirtualDJ source code, proprietary artwork, or licensing mechanisms.
+9. Previous conversation claims that VirtualDJ licensing caused the failure were not conclusively verified. Do not carry those claims into this product.
+
+STANDALONE ARCHITECTURE
+
+Preferred shell:
+- React and TypeScript frontend
+- Tauri 2 desktop host
+- Rust backend
+- Native Windows controller input
+
+Select a suitable audio/DSP architecture after inspecting available libraries, their documentation, and redistribution licenses.
+
+Requirements:
+- No VirtualDJ or loopMIDI dependency for standalone operation.
+- One authoritative audio engine clock for both decks and sampler.
+- Controller and mouse actions use the same command/state system.
+- Playback, controller input, and recording continue when the UI is hidden.
+- Do not depend on browser animation frames or background-throttled JavaScript timers for audio timing or controller dispatch.
+- Keep decoding, analysis, stem separation, disk operations, and allocations out of the real-time audio callback.
+- Publish engine state to the UI at an appropriate bounded rate.
+- Surface failures clearly and recover without freezing the application.
+
+VISUAL LAYOUT
+
+Match the approved reference closely:
+
+Top:
+- Compact SkyDek DJ header
+- Controller status, transport, battery when available
+- Settings and normal Windows window controls
+- Two stacked scrolling waveforms with a shared playhead and beat markers
+
+Middle:
+- Deck 1 on the left
+- Master mixer in the center
+- Deck 2 on the right
+
+Each deck:
+- Artwork, title, artist
+- BPM, musical key when known
+- Elapsed and remaining time
+- Full-track overview waveform
+- Jog platter with playback position
+- Cue, play/pause, sync
+- Pitch/tempo control
+- Effects slots and parameters
+- Hot cue, stems, loop, and sampler access
+
+Center mixer:
+- Deck gain/volume
+- Master output and meters
+- Headphone cue/mix where output hardware supports it
+- Crossfader
+- Recording controls and status
+
+Bottom:
+- Folder/crate navigation on the left
+- Searchable, sortable track library in the center
+- Sidelist/queue and sampler tabs
+- Track information panel on the right
+
+Support 1920×1080 and 1440×900 layouts and Windows display scaling. Panels must resize or scroll without overlapping important controls.
+
+A controller visualization belongs in a secondary panel or settings, rather than displacing the DJ workspace.
+
+AUDIO AND TRANSPORT
+
+Implement real:
+- Independent two-deck playback
+- WAV and MP3 import/playback initially
+- Additional formats only when tested
+- Accurate seek, pause, resume, end-of-track handling
+- Independent deck volume and gain
+- Crossfader with selectable curve
+- Filter sweep
+- Master meters and clipping indication
+- Configurable output device and supported buffer settings
+
+Loading a track must not interrupt the other deck.
+
+A playing deck must not be overwritten without explicit confirmation. The default preparation deck is a nonplaying deck. If both are playing, require an explicit deck choice and confirmation.
+
+CUE AND HOT CUES
+
+Cue is separate from play/pause.
+
+Define and document conventional cue behavior:
+- Set cue while paused
+- Return to cue
+- Hold to preview where applicable
+- Release to return unless playback was explicitly committed
+
+Provide at least eight hot cue slots per deck:
+- Set, trigger, and clear
+- Persistent per-track positions
+- Visible labels/colors
+- Confirmation or modified gesture for destructive clearing
+
+WAVEFORMS, BPM, AND SYNC
+
+- Analyze actual audio samples for waveform data.
+- Render aligned waveforms using engine playback position.
+- Provide beat and bar markers derived from the beat grid.
+- Support waveform zoom and overview seeking.
+- Detect BPM asynchronously, with manual BPM and beat-grid correction.
+- Distinguish detected, manually corrected, and unknown values.
+- Provide tap tempo.
+- Implement tempo matching and phase alignment with clearly defined master/follower behavior.
+- Label tempo-only matching honestly if phase synchronization is not yet implemented.
+- Do not show invented BPM, key, beat grids, or waveform data in real tracks.
+
+LIBRARY AND SIDELIST
+
+- Import files and folders
+- Search and sort tracks
+- Crates/playlists
+- Persistent library and queue
+- Missing-file detection and relinking
+- Drag-and-drop loading
+- Track metadata and artwork where available
+- Read source files without modifying their tags by default
+
+Sidelist actions:
+- Add highlighted track
+- Browse queue
+- Load next entry into preparation deck
+- Remove entry with confirmation
+- Reorder and clear with appropriate confirmation
+
+SAMPLER
+
+- At least sixteen assignable pads
+- Import user audio
+- One-shot and loop modes
+- Per-pad gain and master sampler gain
+- Stop individual/all samples
+- Pad-bank persistence
+- Trigger directly from controller and mouse
+
+EFFECTS
+
+Implement audible DSP for:
+- Backspin
+- Brake stop
+- Brake start
+- Echo/echo out
+- Reverb
+- Filter
+
+Expose relevant duration, wet/dry, and parameter controls.
+
+Backspin must produce reversed/slowing audio behavior.
+Brake stop must decelerate playback.
+Brake start must accelerate into playback.
+
+Lock the selected effect target for the duration of an active effect. Changing target deck must not transfer an executing effect abruptly.
+
+STEMS
+
+Provide:
+- Vocal isolation
+- Instrumental isolation
+- Vocal mute
+- Restore full mix
+- Drums, bass, music, and vocals where supported by the selected model
+
+Use a real, legally redistributable separation engine/model.
+Document model download size, license, hardware requirements, and CPU/GPU support.
+
+Prefer asynchronous precomputation and caching when real-time separation is unsuitable.
+
+Maintain sample alignment between stems.
+Vocal and instrumental isolation must be mutually exclusive.
+If stems are unavailable or processing, explain that state and disable dependent actions.
+
+Never simulate stem separation with an ordinary EQ and label it stems.
+
+RECORDING
+
+- Record the post-mixer master output, including sampler and effects
+- Start, stop, and choose output location
+- WAV recording initially
+- Show elapsed time and recording status
+- Handle disk-full and write failures
+- Flush/finalize recordings during normal exit
+- Bound recording buffers so disk stalls do not block audio playback
+- Warn before exiting with an active recording
+
+CONTROLLER INPUT
+
+Support Xbox Series controllers via Bluetooth and USB.
+
+Verify the APIs actually expose each button.
+Use XInput/GameInput or another documented supported backend as appropriate.
+
+Do not assume the Xbox Share button is available through legacy XInput.
+
+Default Normal mapping:
+- D-pad up/down: browse library
+- D-pad left/right: change browser panel
+- A: load highlighted track into preparation deck
+- B: play/pause target deck
+- X: load next Sidelist track into preparation deck
+- Y: add highlighted track to Sidelist
+- Left stick horizontal: crossfader
+- Left stick vertical: unassigned
+- Right stick horizontal: filter
+- Right stick vertical: selected effect parameter
+- R3: trigger selected sampler pad
+- LT: toggle vocal isolation
+- RT: toggle instrumental isolation
+- LB: backspin
+- RB: brake stop
+- Menu: cycle manual target deck
+- View: Shift layer control
+
+Default Shift mapping:
+- A: load Deck 1 safely
+- B: load Deck 2 safely
+- X: sync target deck
+- Y: remove highlighted Sidelist entry with confirmation
+- LB: echo out
+- RB: reverb
+- LT: mute vocals
+- RT: restore full mix
+- R3: select next sampler sound
+- D-pad up/down: browse Sidelist
+
+Shift configuration:
+- Default: View press toggles Normal/Shift
+- Optional: hold-to-shift mode
+- Optional: three-second long-press toggle
+- One gesture must produce exactly one transition
+- Share may be assignable only when verified available
+
+Input behavior:
+- Edge-trigger one-shot actions
+- Configurable repeat only for browsing
+- Trigger thresholds and hysteresis
+- Stick dead zones, sensitivity, smoothing, calibration
+- Suppress reconnect-generated false presses
+- Do not snap analog audio parameters to controller position on reconnect
+- On disconnection, preserve audio playback and current mix
+- Mouse/keyboard remain operational
+- Reassignment applies to real engine commands
+
+TARGET SELECTION
+
+- Prefer the only playing deck.
+- If both play, use actual engine state and crossfader/gain state to determine a dominant deck only when unambiguous.
+- Provide a visible manual override.
+- Preserve effect target locks.
+- Clearly display target deck and preparation deck separately.
+
+PROFILES AND SETTINGS
+
+- Mixing, Effects, and Stems profiles
+- Normal/Shift mappings
+- Save, duplicate, rename, import/export JSON
+- Schema versioning and validation
+- Preserve existing profiles on import failure
+- Audio devices/buffers
+- Controller calibration and assignment
+- Recording preferences
+- About/Credits
+- Guided setup
+- Diagnostic input → command → engine-result display
+
+WINDOWS DESKTOP BEHAVIOR
+
+- Branded application icon
+- Optional splash screen
+- Close to tray
+- Tray Show and Exit
+- Optional start with Windows
+- Single application instance
+- Reopening the app restores the existing window
+- No terminal windows during normal operation
+- Closing/hiding the UI must not suspend controller control or playback
+- Branded installer, uninstall support, and dependency checks
+- No administrator requirement unless a documented component requires it
+
+EXECUTION MILESTONES
+
+M1: Real two-deck playback, mouse/controller command parity, safe loading, cue, volume, crossfader.
+
+M2: Approved dashboard layout, library, queue, real waveforms, persistent cues and settings.
+
+M3: Sampler, hot cues, loops, filters, backspin, brake start/stop, echo, reverb, recording.
+
+M4: BPM/grid analysis and correction, sync, stems integration and cache.
+
+M5: Hardware recovery, background operation, performance testing, guided setup, installer.
+
+Work continuously through milestones within the available session. Keep a durable progress ledger with implemented items, evidence, known defects, and the next action.
+
+A two-hour checkpoint targets a demonstrable foundation. It does not redefine the complete contract as finished.
+
+VERIFICATION AND ACCEPTANCE
+
+For every delivered feature:
+- Implement it
+- Test its behavior
+- Record what was verified and what remains unverified
+
+Required demonstrations:
+1. Two different tracks play simultaneously.
+2. Mouse B-equivalent and physical Xbox B toggle the same transport state.
+3. Crossfader audibly changes the mix.
+4. Cue and hot cues recall correct positions.
+5. Queue loading does not overwrite a playing deck silently.
+6. Sampler works while both decks play.
+7. Effects audibly process the locked target.
+8. Stems isolate the intended content after processing.
+9. Recorded output plays back and includes the master mix.
+10. Waveforms and beat markers track actual playback.
+11. Disconnect/reconnect causes no false loading or playback commands.
+12. Closing to tray preserves audio and controller operation.
+13. Installer launches successfully on Windows.
+
+Use meaningful unit/integration tests for engine state, mixing calculations, controller edges, safe loading, profile validation, cue persistence, and recording behavior.
+
+Perform real Windows runtime tests with the connected controller and actual audio output. Compilation alone is insufficient.
+
+COMPLETION STANDARD
+
+Do not leave working-looking controls that silently do nothing.
+Disable unavailable functions with a clear explanation.
+Do not substitute mock audio, fake meters, or static waveforms for delivered functionality.
+
+Report separately:
+- Implemented
+- Automatically tested
+- Runtime verified
+- Hardware verified
+- Packaged
+- Remaining limitations
+
+Deliver source code, build instructions, dependency/license inventory, test evidence, user guide, and the Windows installer.
+
+Begin by inspecting the repository and creating the implementation plan and progress ledger. Then implement M1 and continue through the milestones.

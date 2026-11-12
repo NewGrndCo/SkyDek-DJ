@@ -1,0 +1,35 @@
+.deck { position: relative; }
+.deck-glow {
+  pointer-events: none;
+  position: absolute;
+  inset: -7px;
+  border-radius: inherit;
+  border: 2px solid var(--deck);
+  background: transparent;
+  filter: blur(3px);
+  opacity: var(--glow-opacity, 0);
+  box-shadow: 0 0 24px 3px var(--deck), inset 0 0 12px var(--deck);
+  transition: opacity 220ms ease;
+}
+.deck-glow.ending { animation: deck-ending 1.4s ease-in-out infinite; }
+.deck-glow.finished { animation: deck-finished 1.8s ease-out forwards; }
+@keyframes deck-ending { 50% { opacity: .18; } }
+@keyframes deck-finished {
+  0%, 35% { opacity: .9; }
+  18% { opacity: .25; }
+  100% { opacity: 0; }
+}
+.deck-glow.still { animation: none; }
+.header-right button, .transport button, .pad, .settings-sidebar button {
+  transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.pad:has(button.active) { box-shadow: inset 0 0 0 1px var(--accent); }
+.sample-dialog, .settings-shell { animation: panel-appear 150ms ease-out; }
+@keyframes panel-appear { from { opacity: .4; transform: translateY(5px); } }
+main[data-motion="reduced"] *, main[data-motion="reduced"] *::before, main[data-motion="reduced"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media(prefers-reduced-motion: reduce) {
+  .deck-glow, .sample-dialog, .settings-shell { animation: none; transition: none; }
+}

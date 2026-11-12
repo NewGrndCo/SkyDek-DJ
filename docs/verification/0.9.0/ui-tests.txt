@@ -1,0 +1,27 @@
+
+> skydek-dj@0.9.0 test:ui
+> node --experimental-strip-types --test tests/*.test.mjs
+
+✔ frames interpolate from the audio anchor at fractional deck rate (1.4309ms)
+✔ each 75ms snapshot replaces prediction without accumulating drift (7.9456ms)
+✔ missing snapshots and background-tab suspension cannot extrapolate indefinitely (0.3438ms)
+✔ pause snaps to authoritative position and resume uses the new rate (0.2403ms)
+✔ forward and backward seeks replace rather than blend old positions (0.2012ms)
+✔ load, unload and same-path reload honor the new authoritative position (0.1768ms)
+✔ echo and reverb retain normal rate-based transport (0.2027ms)
+✔ backspin follows observed reverse speed including a wet-scaled fast throw (0.1489ms)
+✔ brake and start use observed positive speed; release restores rate prediction (0.2652ms)
+✔ effect transitions, rate changes, gaps, and loads discard incompatible velocity (0.2803ms)
+✔ impossible seek deltas and wrong direction cannot become effect speed (0.2018ms)
+✔ track boundaries, invalid numbers, and backwards timestamps stay finite and bounded (0.1914ms)
+✔ dragging uses a frozen anchor instead of compounding live playback snapshots (1.0305ms)
+✔ zoomed clicks use the visible window and cannot seek beyond the track (0.7991ms)
+✔ corrupt persisted panel values cannot hide the library or create invalid dimensions (1.0143ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 181.4441

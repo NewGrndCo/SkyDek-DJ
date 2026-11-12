@@ -1,0 +1,8 @@
+.midi-panel { min-width: 0; }
+.midi-connect, .midi-learn-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.midi-panel label { display: grid; gap: 6px; flex: 1; min-width: 120px; }
+.midi-connect select { width: 100%; }
+.midi-connection-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.midi-learn { margin-top: 24px; border-top: 1px solid var(--settings-line); }
+.midi-input { font-variant-numeric: tabular-nums; }
+.midi-assignment { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(130px, 1.5fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--settings-line); font-size: 12px; }

@@ -1,0 +1,9 @@
+[package]
+name = "skydek-mp3-encoder"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Standalone stdin PCM to MP3 encoder for SkyDek"
+
+[dependencies]
+mp3lame-encoder = "0.3"

@@ -1,0 +1,61 @@
+   Compiling skydek-dj v0.9.0 (C:\Users\New Ground\SkyDek\SkyDek-DJ\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.03s
+     Running unittests src\main.rs (src-tauri\target\debug\deps\skydek_dj-f333efa211f59be5.exe)
+
+running 53 tests
+test analysis::tests::waveform_keeps_signed_peaks_and_rms ... ok
+test audio::tests::decoder_fixture_matches_streaming_and_sampler_pcm ... ignored, set SKYDEK_AUDIO_TEST_FILE to a local audio fixture
+test audio::tests::crossfade_endpoints ... ok
+test audio::tests::moving_sampler_tile_preserves_voice ... ok
+test audio::tests::gated_effect_release_is_deck_and_effect_specific ... ok
+test audio::tests::new_track_resets_speed_and_seek_cancels_brake_and_loop ... ok
+test audio::tests::load_guard_and_cue ... ok
+test audio::tests::hotcue_recall_and_clear ... ok
+test audio::tests::clearing_pad_stops_voice_and_allows_reassignment ... ok
+test audio::tests::relative_crossfader_accumulates_without_snapshot_feedback ... ok
+test audio::tests::restart_and_replacement_clear_previous_overlaps ... ok
+test audio::tests::overlap_is_polyphonic_bounded_and_stop_clears_every_voice ... ok
+test audio::tests::decks_mix_and_clock ... ok
+test audio::tests::backspin_release_resumes_forward_and_start_boundary_stays_safe ... ok
+test audio::tests::cue_release_stays_on_original_deck ... ok
+test audio::tests::wet_rejects_nonfinite_values_and_clamps_valid_values ... ok
+test audio::tests::sampler_plays_without_decks ... ok
+test input::tests::click_blocks_axes_until_neutral_after_release ... ok
+test input::tests::deadzone_is_continuous_and_slow_movements_accumulate ... ok
+test audio::tests::toggle_starts_stops_and_starts_again ... ok
+test audio::tests::sample_release_stops_only_the_original_voice ... ok
+test audio::tests::cue_tap_returns_to_fixed_mark ... ok
+test integration_tests::legacy_session_migrates_without_losing_library ... ok
+test mapping::tests::invalid_actions_rejected ... ok
+test navigation::tests::folder_navigation_includes_ancestors_and_excludes_siblings ... ok
+test mapping::tests::defaults_and_roundtrip ... ok
+test navigation::tests::sampler_moves_by_rows_and_columns_without_wrapping ... ok
+test audio::tests::auto_crossfade_reaches_opposite_side_and_manual_input_cancels ... ok
+test audio::tests::configurable_short_cue_hold_commits_and_disconnect_cancels ... ok
+test navigation::tests::skips_unavailable_rows ... ok
+test navigation::tests::windows_folders_are_exact ... ok
+test preferences::tests::defaults_migrate_and_short_cue_times_validate ... ok
+test audio::tests::loop_keeps_playhead_in_range ... ok
+test recording::tests::stopped_producer_still_requires_writer_join ... ok
+test audio::tests::reverb_keeps_channels_separate_and_clear_removes_tail ... ok
+test audio::tests::brake_stops_and_backspin_reverses ... ok
+test audio::tests::restart_retriggers_at_zero_then_finishes_without_release_command ... ok
+test recording::tests::file_creation_errors_leave_recorder_inactive_and_reusable ... ok
+test recording::tests::empty_recordings_finalize_and_recorder_restarts_across_formats ... ok
+test recording::tests::invalid_format_or_rate_does_not_truncate_or_activate ... ok
+test analysis::tests::streaming_scan_reads_duration_and_supports_cancel ... ok
+test audio::tests::cue_three_seconds_commits_on_release ... ok
+test audio::tests::cue_short_hold_and_disconnect_never_commit ... ok
+test recording::tests::wav_regression_preserves_float_samples_rate_and_tail ... ok
+test audio::tests::reverb_wet_endpoints_mix_and_tail_survives_track_end ... ok
+test audio::tests::backspin_is_fast_wet_scaled_finite_and_stops_with_a_fade ... ok
+test analysis::tests::detects_regular_beats_and_rejects_silence ... ok
+test recording::tests::concurrent_stop_drains_every_accepted_wav_frame ... ok
+test audio::tests::reverb_gate_cuts_output_and_bypass_drains_history ... ok
+test audio::tests::malformed_mp3_reservoir_recovers_for_streaming_and_sampler_decode ... ok
+test integration_tests::sound_folder_scan_and_sampler_persistence ... ok
+test recording::tests::mp3_round_trip_duration_rates_stereo_and_bitrate ... ok
+test audio::tests::reverb_impulse_is_dense_deterministic_and_decays_at_device_rates ... ok
+
+test result: ok. 52 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
