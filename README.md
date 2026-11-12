@@ -1,5 +1,9 @@
 # SkyDek DJ
 
+## Platform support
+
+SkyDek DJ supports Windows and macOS. Windows installers use the NSIS package. macOS builds are produced on an Apple-hosted GitHub Actions runner as a native `.dmg`, because Apple’s packaging and signing toolchain is required for a distributable Mac application. On macOS, run `npm run package:mac` to build locally, or push a version tag to use the included workflow.
+
 Standalone Windows DJ application by New Ground Enterprise. This is the private development workspace. Public installer/documentation distributions are assembled separately under release/. VirtualDJ and loopMIDI are not required.
 
 Current local build: **0.9.1 preview**. See [0.9.1 update notes](docs/UPDATE-0.9.1.md). The full build contract remains in docs/BUILD-CONTRACT.txt; this preview is not a completed implementation of every contracted feature.

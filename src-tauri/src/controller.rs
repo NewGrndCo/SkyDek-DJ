@@ -204,3 +204,41 @@ pub fn read_xinput() -> ControllerSnapshot {
         buttons,
     }
 }
+
+#[cfg(not(windows))]
+pub fn read_xinput() -> ControllerSnapshot {
+    use gilrs::{Axis, Button, EventType, Gilrs};
+    use std::sync::Mutex;
+
+    static GILRS: OnceLock<Mutex<Gilrs>> = OnceLock::new();
+    let gilrs = GILRS.get_or_init(|| Mutex::new(Gilrs::new().expect("gamepad backend")));
+    let mut gilrs = match gilrs.lock() {
+        Ok(value) => value,
+        Err(_) => return ControllerSnapshot::disconnected(),
+    };
+    while gilrs.next_event().is_some() {}
+    let Some((id, _)) = gilrs.gamepads().find(|(_, gamepad)| gamepad.is_connected()) else {
+        return ControllerSnapshot::disconnected();
+    };
+    let gamepad = gilrs.gamepad(id);
+    let mut buttons = HashMap::new();
+    for (name, button) in [
+        ("a", Button::South), ("b", Button::East), ("x", Button::West), ("y", Button::North),
+        ("dpad-up", Button::DPadUp), ("dpad-down", Button::DPadDown),
+        ("dpad-left", Button::DPadLeft), ("dpad-right", Button::DPadRight),
+        ("lb", Button::LeftTrigger), ("rb", Button::RightTrigger),
+        ("l3", Button::LeftThumb), ("r3", Button::RightThumb),
+        ("menu", Button::Start), ("view", Button::Select),
+    ] {
+        buttons.insert(name.to_string(), gamepad.is_pressed(button));
+    }
+    let axis = |axis: Axis| gamepad.value(axis).unwrap_or(0.0);
+    ControllerSnapshot {
+        connected: true,
+        left_stick_x: axis(Axis::LeftStickX), left_stick_y: axis(Axis::LeftStickY),
+        right_stick_x: axis(Axis::RightStickX), right_stick_y: axis(Axis::RightStickY),
+        left_trigger: axis(Axis::LeftZ).max(0.0), right_trigger: axis(Axis::RightZ).max(0.0),
+        battery_percent: None,
+        buttons,
+    }
+}

@@ -522,7 +522,7 @@ function App() {
         <span className="divider" />
         <span className={"connection " + (s?.connected ? "online" : "")}>
           <span className="connection-pulse" aria-hidden="true" />
-          {s?.connected ? "Xbox connected" : "Controller disconnected"}
+          {s?.connected ? "Xbox controller" : "Controller disconnected"}
         </span>
         <div className="header-right">
           <button
@@ -533,6 +533,7 @@ function App() {
           >
             Auto DJ
           </button>
+          <button className="update-header-button" title="Check for application updates" onClick={() => { setSettings(true); setTimeout(() => window.dispatchEvent(new Event("skydek-check-updates")), 0); }}>Check for updates</button>
           <button className="analysis-progress" title={s?.analysis.running ? s.analysis.current : (s?.analysis.message || "Analyze duration and estimate BPM for your library")} onClick={() => invoke("analyze_library", {force:false, cancel:s?.analysis.running || false}).catch(e=>setError(String(e)))}>{s?.analysis.running ? `Analyzing ${s.analysis.completed}/${s.analysis.total} · Pause` : "Analyze library"}</button>
           <label className="skin-picker">
             Skin

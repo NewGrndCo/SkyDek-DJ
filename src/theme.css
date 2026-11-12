@@ -162,6 +162,8 @@ main[data-theme="light"] ::selection { color: #36214e; background: #d8c2f0; }
 .skin-picker select { min-height: 34px; padding: 4px 8px; }
 .sampler-banks { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin:8px 0; }
 .sampler-banks button { min-height:30px; font-size:10px; letter-spacing:.08em; }
+.update-header-button { white-space:nowrap; }
+.connection { margin-left: 4px; }
 .brand-logo { width: clamp(180px, 18vw, 285px); height: 42px; object-fit: contain; object-position: left center; display: block; }
 .connection-pulse { width: 9px; height: 9px; border-radius: 50%; background: #667080; display: inline-block; margin-right: 7px; }
 .connection.online .connection-pulse { background: #9cff43; box-shadow: 0 0 0 0 #9cff43; animation: connection-pulse 1.8s infinite; }

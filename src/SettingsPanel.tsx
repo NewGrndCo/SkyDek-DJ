@@ -61,6 +61,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
       setUpdateState(newer ? "available" : "current");
     } catch (error) { setUpdateState("error"); setMessage(`Update check failed: ${String(error)}`); }
   }
+  useEffect(() => {
+    const handler = () => { setPage("appearance"); setVisited(previous => new Set([...previous, "appearance"])); void checkForUpdates(); };
+    window.addEventListener("skydek-check-updates", handler);
+    return () => window.removeEventListener("skydek-check-updates", handler);
+  }, []);
   async function installUpdate() {
     if (!pendingUpdate) { window.open(releaseUrl, "_blank", "noopener,noreferrer"); return; }
     setMessage("Downloading update…");
