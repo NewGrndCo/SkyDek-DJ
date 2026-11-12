@@ -207,7 +207,7 @@ pub fn read_xinput() -> ControllerSnapshot {
 
 #[cfg(not(windows))]
 pub fn read_xinput() -> ControllerSnapshot {
-    use gilrs::{Axis, Button, EventType, Gilrs};
+    use gilrs::{Axis, Button, Gilrs};
     use std::sync::Mutex;
 
     static GILRS: OnceLock<Mutex<Gilrs>> = OnceLock::new();
@@ -232,7 +232,7 @@ pub fn read_xinput() -> ControllerSnapshot {
     ] {
         buttons.insert(name.to_string(), gamepad.is_pressed(button));
     }
-    let axis = |axis: Axis| gamepad.value(axis).unwrap_or(0.0);
+    let axis = |axis: Axis| gamepad.value(axis);
     ControllerSnapshot {
         connected: true,
         left_stick_x: axis(Axis::LeftStickX), left_stick_y: axis(Axis::LeftStickY),

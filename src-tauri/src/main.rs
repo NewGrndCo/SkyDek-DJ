@@ -1721,9 +1721,12 @@ fn main() {
             };
             let show = MenuItem::with_id(app, "show", "Show SkyDek DJ", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "exit", "Exit SkyDek DJ", true, None::<&str>)?;
-            TrayIconBuilder::new()
-                .icon(tauri::image::Image::from_app_icon_resource(32)?)
-                .tooltip("SkyDek DJ")
+            let mut tray = TrayIconBuilder::new();
+            #[cfg(windows)]
+            {
+                tray = tray.icon(tauri::image::Image::from_app_icon_resource(32)?);
+            }
+            tray.tooltip("SkyDek DJ")
                 .menu(&Menu::with_items(app, &[&show, &exit])?)
                 .on_menu_event(|a, e| match e.id.as_ref() {
                     "show" => {

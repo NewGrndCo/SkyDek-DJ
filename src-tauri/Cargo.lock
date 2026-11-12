@@ -3963,7 +3963,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skydek-dj"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "cpal",
  "crossbeam-queue",
