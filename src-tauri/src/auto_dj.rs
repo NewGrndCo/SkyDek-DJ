@@ -10,6 +10,9 @@ pub(super) struct State {
     pub enabled: bool,
     pub status: String,
     pub pending: Option<Pending>,
+    pub samples_left: u8,
+    pub next_sample_at: Option<Instant>,
+    pub sample_deadline: Option<Instant>,
 }
 
 pub(super) struct Pending {
@@ -24,6 +27,7 @@ struct Source {
     deck: usize,
     path: String,
     ids: [usize; 2],
+    kind: String,
 }
 
 struct Prepared {
@@ -50,13 +54,27 @@ pub(super) fn acknowledge(m: &mut Model) {
                 .any(|p| p == path)
         });
         m.cache.insert(pending.path.clone(), pending.track);
-        m.loaded[pending.deck] = Some(pending.path);
+        m.loaded[pending.deck] = Some(pending.path.clone());
+        if m.session.preferences.auto_dj_source == "queue" {
+            if let Some(at) = m
+                .session
+                .queue
+                .iter()
+                .position(|path| path == &pending.path)
+            {
+                m.session.queue.remove(at);
+            }
+        }
+        m.sync_restore[pending.deck] = None;
         m.last = format!("Auto DJ → Deck {}", pending.deck + 1);
     }
 }
 
 fn source(m: &Model, previous: Option<&Source>) -> Option<Source> {
-    if !m.auto_dj.enabled || m.auto_dj.pending.is_some() || m.pending_loads.iter().any(Option::is_some) {
+    if !m.auto_dj.enabled
+        || m.auto_dj.pending.is_some()
+        || m.pending_loads.iter().any(Option::is_some)
+    {
         return None;
     }
     let [a, b] = m.view.decks;
@@ -78,6 +96,7 @@ fn source(m: &Model, previous: Option<&Source>) -> Option<Source> {
         return None;
     }
     let path = m.loaded[deck].as_ref()?;
+    let kind = m.session.preferences.auto_dj_source.clone();
     let ids = m.view.decks.map(|d| d.track_id);
     for (i, loaded) in m.loaded.iter().enumerate() {
         let id = loaded
@@ -92,6 +111,7 @@ fn source(m: &Model, previous: Option<&Source>) -> Option<Source> {
         deck,
         path: path.clone(),
         ids,
+        kind,
     })
 }
 
@@ -112,8 +132,20 @@ fn folder_candidates<'a>(
 fn prepare(s: &AppState, source: &Source) -> Option<Prepared> {
     let candidates = {
         let m = s.model.lock().unwrap();
-        let tracks = folder_candidates(&m.session.library, &source.path)?;
+        let tracks: Vec<_> = if source.kind == "queue" {
+            let current = m.session.queue.iter().position(|p| p == &source.path);
+            m.session
+                .queue
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| Some(*i) != current)
+                .filter_map(|(_, path)| m.session.library.iter().find(|track| &track.path == path))
+                .collect()
+        } else {
+            folder_candidates(&m.session.library, &source.path)?.collect()
+        };
         tracks
+            .into_iter()
             .map(|t| (t.path.clone(), t.title.clone()))
             .collect::<Vec<_>>()
     };
@@ -134,6 +166,50 @@ pub(super) fn start(s: Arc<AppState>) {
         let mut next = None;
         loop {
             std::thread::sleep(Duration::from_millis(40));
+            {
+                let mut m = s.model.lock().unwrap();
+                if m.auto_dj
+                    .sample_deadline
+                    .is_some_and(|end| Instant::now() >= end)
+                {
+                    m.auto_dj.samples_left = 0;
+                    m.auto_dj.next_sample_at = None;
+                    m.auto_dj.sample_deadline = None;
+                }
+                if m.auto_dj.enabled
+                    && m.auto_dj.samples_left > 0
+                    && m.auto_dj
+                        .next_sample_at
+                        .is_some_and(|at| Instant::now() >= at)
+                {
+                    let available: Vec<usize> = m
+                        .samples
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, sample)| sample.as_ref().map(|_| index))
+                        .collect();
+                    if !available.is_empty() {
+                        let seed = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos() as usize;
+                        let slot =
+                            available[(seed + m.auto_dj.samples_left as usize) % available.len()];
+                        let _ = s.send(Cmd::SamplePress(slot, crate::sampler::PlayMode::Restart));
+                    }
+                    m.auto_dj.samples_left -= 1;
+                    m.auto_dj.next_sample_at = if m.auto_dj.samples_left > 0 {
+                        Some(
+                            Instant::now()
+                                + Duration::from_secs_f64(
+                                    m.session.preferences.auto_dj_sample_spacing,
+                                ),
+                        )
+                    } else {
+                        None
+                    };
+                }
+            }
             let current = source(&s.model.lock().unwrap(), previous.as_ref());
             let Some(current) = current else {
                 let mut m = s.model.lock().unwrap();
@@ -168,12 +244,17 @@ pub(super) fn start(s: Arc<AppState>) {
                 .session
                 .preferences
                 .auto_dj_seconds
+                .max(m.session.preferences.auto_dj_crossfade_seconds)
                 .min(deck.duration / deck.rate.max(0.01) / 2.)
                 .min(incoming_seconds / 2.);
             if remaining > lead {
                 continue;
             }
-            let seconds = remaining.max(0.05);
+            let seconds = m
+                .session
+                .preferences
+                .auto_dj_crossfade_seconds
+                .min(remaining.max(0.05));
             let (hot, cue) = m
                 .session
                 .library
@@ -190,6 +271,18 @@ pub(super) fn start(s: Arc<AppState>) {
             })
             .is_ok()
             {
+                m.auto_dj.samples_left = if m.session.preferences.auto_dj_random_samples {
+                    m.session.preferences.auto_dj_sample_count.min(
+                        (seconds / m.session.preferences.auto_dj_sample_spacing)
+                            .ceil()
+                            .max(1.) as u8,
+                    )
+                } else {
+                    0
+                };
+                m.auto_dj.next_sample_at = (m.auto_dj.samples_left > 0).then(Instant::now);
+                m.auto_dj.sample_deadline = (m.auto_dj.samples_left > 0)
+                    .then(|| Instant::now() + Duration::from_secs_f64(seconds));
                 m.auto_dj.pending = Some(Pending {
                     deck: 1 - current.deck,
                     path: prepared.path.clone(),

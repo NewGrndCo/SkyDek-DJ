@@ -1,0 +1,46 @@
+name: Publish signed Windows update
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Test UI logic
+        run: npm run test:ui
+      - name: Build frontend
+        run: npm run build
+      - name: Test Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build, sign, and publish Windows updater
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: SkyDek DJ ${{ github.ref_name }}
+          releaseBody: |
+            SkyDek DJ adds safe double-click deck loading, dynamic Xbox mapping labels, and the latest beta-tested Mix Editor and workflow improvements.
+
+            Existing installations can install this signed update from Check for updates.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --bundles nsis

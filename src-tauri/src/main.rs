@@ -6,6 +6,8 @@ mod controller;
 mod input;
 mod mapping;
 mod midi;
+mod mix_editor;
+mod mixlog;
 mod navigation;
 mod preferences;
 mod recording;
@@ -54,9 +56,12 @@ fn read_session(path: &std::path::Path) -> Result<Session, String> {
         Ok(bytes) => {
             let mut session: Session = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             session.pad_paths.resize(sampler::SAMPLER_SLOTS, None);
-            session.preferences.sampler_modes.resize(sampler::SAMPLER_SLOTS, sampler::PlayMode::Restart);
+            session
+                .preferences
+                .sampler_modes
+                .resize(sampler::SAMPLER_SLOTS, sampler::PlayMode::Restart);
             Ok(session)
-        },
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Session::default()),
         Err(e) => Err(e.to_string()),
     }
@@ -74,7 +79,9 @@ fn open_session(dir: &std::path::Path) -> Result<(PathBuf, Session, String), Str
             } else {
                 read_session(&backup)
             }
-                .map_err(|e| format!("Both session files are unreadable. Files preserved. {error}; {e}"))?;
+            .map_err(|e| {
+                format!("Both session files are unreadable. Files preserved. {error}; {e}")
+            })?;
             Ok((recovery, session, format!(
                 "Session could not be opened. The original was preserved. Changes are saved to session-recovery.json. {error}"
             )))
@@ -90,7 +97,10 @@ fn unreadable_session_uses_backup_and_preserves_original() {
     let original = dir.join("session.json");
     let backup = dir.join("session.backup.json");
     std::fs::write(&original, b"interrupted save").unwrap();
-    let session = Session { queue: vec!["saved-track.wav".into()], ..Session::default() };
+    let session = Session {
+        queue: vec!["saved-track.wav".into()],
+        ..Session::default()
+    };
     std::fs::write(&backup, serde_json::to_vec(&session).unwrap()).unwrap();
     let (recovery, loaded, warning) = open_session(&dir).unwrap();
     assert_eq!(recovery, dir.join("session-recovery.json"));
@@ -111,6 +121,7 @@ struct Model {
     session: Session,
     cache: HashMap<String, Arc<Track>>,
     loaded: [Option<String>; 2],
+    sync_restore: [Option<f64>; 2],
     pending_loads: [Option<PendingLoad>; 2],
     library_revision: u32,
     selected: usize,
@@ -125,6 +136,10 @@ struct Model {
     view: View,
     tab: String,
     library_query: String,
+    library_sort: String,
+    library_desc: bool,
+    library_order: Vec<usize>,
+    sampler_bank_focus: bool,
 }
 struct PendingLoad {
     path: String,
@@ -142,6 +157,7 @@ struct AppState {
     device: String,
     rate: u32,
     recorder: Arc<recording::Recorder>,
+    mixlog: Mutex<mixlog::Manager>,
     save_guard: Mutex<()>,
     sample_guard: Mutex<()>,
 }
@@ -156,6 +172,7 @@ struct Snapshot {
     library_revision: u32,
     queue: Vec<String>,
     loaded: [Option<String>; 2],
+    synced: [bool; 2],
     selected: usize,
     target: usize,
     shift: bool,
@@ -172,42 +189,88 @@ struct Snapshot {
     recording: bool,
     recorded_seconds: f64,
     recording_path: String,
+    mix_events: Vec<mixlog::Event>,
+    mix_log_path: String,
     mappings: mapping::Mappings,
     sound_folder: Option<String>,
     sound_revision: u64,
     music_roots: Vec<String>,
     library_folder: String,
+    sampler_bank_focus: bool,
 }
 
 fn library_indices(m: &Model) -> Vec<usize> {
-    m.session
+    let mut indices: Vec<usize> = m
+        .session
         .library
         .iter()
         .enumerate()
         .filter(|(_, t)| {
             navigation::in_folder(&t.path, &m.session.library_folder)
-                && t.title
+                && (t
+                    .title
                     .to_lowercase()
                     .contains(&m.library_query.to_lowercase())
+                    || t.path
+                        .to_lowercase()
+                        .contains(&m.library_query.to_lowercase()))
         })
         .map(|(i, _)| i)
-        .collect()
+        .collect();
+    if m.library_order.len() == indices.len() {
+        let unique: std::collections::HashSet<_> = m.library_order.iter().collect();
+        let visible: std::collections::HashSet<_> = indices.iter().collect();
+        if unique.len() == indices.len() && unique == visible {
+            return m.library_order.clone();
+        }
+    }
+    indices.sort_by(|a, b| {
+        let first = &m.session.library[*a];
+        let second = &m.session.library[*b];
+        let order = match m.library_sort.as_str() {
+            "bpm" => first.bpm.unwrap_or(0.).total_cmp(&second.bpm.unwrap_or(0.)),
+            "duration" => first.duration.total_cmp(&second.duration),
+            _ => first.title.to_lowercase().cmp(&second.title.to_lowercase()),
+        };
+        if m.library_desc {
+            order.reverse()
+        } else {
+            order
+        }
+    });
+    indices
 }
 #[tauri::command]
 fn library_view(
     s: tauri::State<Arc<AppState>>,
     folder: String,
     query: String,
+    sort: String,
+    descending: bool,
+    order: Vec<usize>,
 ) -> Result<(), String> {
     let mut m = s.model.lock().unwrap();
     m.session.library_folder = folder;
     m.library_query = query;
+    m.library_sort = if ["title", "bpm", "duration"].contains(&sort.as_str()) {
+        sort
+    } else {
+        "title".into()
+    };
+    m.library_desc = descending;
+    m.library_order = order;
     let ids = library_indices(&m);
     if !ids.contains(&m.selected) {
         m.selected = ids.first().copied().unwrap_or(0)
     }
     drop(m);
     s.save()
+}
+#[tauri::command]
+async fn track_artwork(path: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || audio::embedded_artwork(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn add_sample(s: tauri::State<'_, Arc<AppState>>, path: String) -> Result<usize, String> {
@@ -231,7 +294,7 @@ impl AppState {
         Ok((i, mode))
     }
     fn swap(&self, from: usize, to: usize) -> Result<(), String> {
-        if from >= 16 || to >= 16 {
+        if from >= sampler::SAMPLER_SLOTS || to >= sampler::SAMPLER_SLOTS {
             return Err("Invalid sampler tile".into());
         }
         let _guard = self.sample_guard.lock().unwrap();
@@ -332,11 +395,21 @@ impl AppState {
                 .chain(m.samples.iter())
                 .flatten()
                 .cloned()
-                .chain(m.pending_loads.iter().flatten().map(|load| load.path.clone()))
+                .chain(
+                    m.pending_loads
+                        .iter()
+                        .flatten()
+                        .map(|load| load.path.clone()),
+                )
                 .collect();
             m.cache.retain(|p, _| active.contains(p));
             m.cache.insert(path.clone(), t.clone());
-            if let Some(existing) = m.session.library.iter_mut().find(|entry| entry.path == path) {
+            if let Some(existing) = m
+                .session
+                .library
+                .iter_mut()
+                .find(|entry| entry.path == path)
+            {
                 existing.waveform = info.waveform;
                 existing.duration = info.duration;
                 m.library_revision = m.library_revision.wrapping_add(1);
@@ -377,7 +450,11 @@ impl AppState {
             force,
             result: result.clone(),
         })?;
-        m.pending_loads[deck] = Some(PendingLoad { path, track, result });
+        m.pending_loads[deck] = Some(PendingLoad {
+            path,
+            track,
+            result,
+        });
         Ok(())
     }
     fn action(
@@ -400,8 +477,36 @@ impl AppState {
             "auto_dj" => {
                 m.auto_dj.enabled = v != 0.;
                 m.auto_dj.status.clear();
+                if !m.auto_dj.enabled {
+                    m.auto_dj.samples_left = 0;
+                    m.auto_dj.next_sample_at = None;
+                    m.auto_dj.sample_deadline = None;
+                }
             }
             "auto_dj_seconds" => m.session.preferences.auto_dj_seconds = v.clamp(1., 60.),
+            "auto_dj_source" => {
+                m.session.preferences.auto_dj_source =
+                    if v == 1. { "queue" } else { "folder" }.into()
+            }
+            "library_monitor" => m.session.preferences.library_monitor = v != 0.,
+            "library_scan_minutes" => {
+                m.session.preferences.library_scan_minutes = v.clamp(1., 1440.) as u16
+            }
+            "auto_dj_crossfade_seconds" => {
+                m.session.preferences.auto_dj_crossfade_seconds = v.clamp(0.1, 30.)
+            }
+            "auto_dj_sample_count" => {
+                m.session.preferences.auto_dj_sample_count = v.clamp(0., 8.) as u8
+            }
+            "auto_dj_sample_spacing" => {
+                m.session.preferences.auto_dj_sample_spacing = v.clamp(0.1, 30.)
+            }
+            "auto_dj_random_samples" => m.session.preferences.auto_dj_random_samples = v != 0.,
+            "normalize_tracks" => {
+                m.session.preferences.normalize_tracks = v != 0.;
+                self.send(Cmd::Normalize(m.session.preferences.normalize_tracks))?;
+            }
+            "effect_toggle" => m.session.preferences.effect_toggle = v != 0.,
             "cue_seconds" => {
                 m.session.preferences.cue_seconds = v.clamp(0.1, 10.);
                 self.send(Cmd::CueSeconds(m.session.preferences.cue_seconds))?;
@@ -413,7 +518,10 @@ impl AppState {
                 index.unwrap_or(0).min(5) as u8,
                 action == "fx_down",
             ))?,
-            "sample_stop" => self.send(Cmd::StopSample(index.unwrap_or(m.sampler).min(sampler::SAMPLER_SLOTS - 1)))?,
+            "fx_toggle" => self.send(Cmd::FxToggle(d, index.unwrap_or(0).min(5) as u8))?,
+            "sample_stop" => self.send(Cmd::StopSample(
+                index.unwrap_or(m.sampler).min(sampler::SAMPLER_SLOTS - 1),
+            ))?,
             "sensitivity" => m.session.sensitivity = v.clamp(0.1, 4.),
             "play" => {
                 if m.loaded[d].is_none() {
@@ -431,14 +539,34 @@ impl AppState {
             "scrub_end" => self.send(Cmd::ScrubEnd(d, v))?,
             "volume" => self.send(Cmd::Volume(d, v as f32))?,
             "filter" => self.send(Cmd::Filter(d, v as f32))?,
-            "rate" => self.send(Cmd::Rate(d, v))?,
+            "rate" => {
+                m.sync_restore[d] = None;
+                self.send(Cmd::Rate(d, v))?
+            }
             "cross" => self.send(Cmd::Cross(v as f32))?,
             "master" => self.send(Cmd::Master(v as f32))?,
             "sampler_volume" => {
                 m.session.preferences.sampler_volume = v.clamp(0., 1.);
-                self.send(Cmd::SamplerVolume(m.session.preferences.sampler_volume as f32))?;
+                self.send(Cmd::SamplerVolume(
+                    m.session.preferences.sampler_volume as f32,
+                ))?;
             }
-            "curve" => self.send(Cmd::Linear(v > 0.))?,
+            "mic_volume" => {
+                m.session.preferences.mic_volume = v.clamp(0., 1.);
+                self.send(Cmd::MicVolume(m.session.preferences.mic_volume as f32))?;
+            }
+            "mic_mute" => {
+                m.session.preferences.mic_mute = v != 0.;
+                self.send(Cmd::MicMute(m.session.preferences.mic_mute))?;
+            }
+            "mic_ducking" => {
+                m.session.preferences.mic_ducking = v != 0.;
+                self.send(Cmd::MicDucking(m.session.preferences.mic_ducking))?;
+            }
+            "curve" => {
+                m.session.preferences.linear_curve = v > 0.;
+                self.send(Cmd::Linear(m.session.preferences.linear_curve))?;
+            }
             "target" => m.target = Some(d),
             "auto_target" => m.target = None,
             "shift" => m.shift = !m.shift,
@@ -469,10 +597,18 @@ impl AppState {
                         navigation::browse(&(0..folders.len()).collect::<Vec<_>>(), at, v as isize)
                     {
                         m.session.library_folder = folders[i].clone();
-                        m.selected = library_indices(&m).first().copied().unwrap_or(0);
+                        // Browsing folders updates the visible list, but does not move its cursor.
                     }
                 } else if m.tab == "sampler" {
-                    m.sampler = navigation::pad_step(m.sampler, 0, v.signum() as isize);
+                    if m.sampler_bank_focus {
+                        if v > 0. {
+                            m.sampler_bank_focus = false;
+                        }
+                    } else if v < 0. && m.sampler % 16 < 4 {
+                        m.sampler_bank_focus = true;
+                    } else {
+                        m.sampler = navigation::pad_step(m.sampler, 0, v.signum() as isize);
+                    }
                 } else {
                     let indices = library_indices(&m);
                     if let Some(i) = navigation::browse(&indices, m.selected, v as isize) {
@@ -482,6 +618,13 @@ impl AppState {
             }
             "sample_select" => {
                 m.sampler = index.unwrap_or(m.sampler).min(sampler::SAMPLER_SLOTS - 1);
+                m.sampler_bank_focus = false;
+                m.tab = "sampler".into();
+            }
+            "bank_select" => {
+                let bank = index.unwrap_or(0).min(2);
+                m.sampler = bank * 16 + m.sampler % 16;
+                m.sampler_bank_focus = true;
                 m.tab = "sampler".into();
             }
             "focus_library" => m.tab = "library".into(),
@@ -489,8 +632,20 @@ impl AppState {
             "focus_sampler" => m.tab = "sampler".into(),
             "panel_left" | "panel_right" => {
                 if m.tab == "sampler" && !m.shift {
-                    if action == "panel_left" && m.sampler.is_multiple_of(4) {
+                    if m.sampler_bank_focus {
+                        let bank = m.sampler / 16;
+                        let next = if action == "panel_left" {
+                            bank.saturating_sub(1)
+                        } else {
+                            (bank + 1).min(2)
+                        };
+                        m.sampler = next * 16 + m.sampler % 16;
+                    } else if action == "panel_left" && m.sampler.is_multiple_of(4) {
                         m.tab = "library".into();
+                        let indices = library_indices(&m);
+                        if !indices.contains(&m.selected) {
+                            m.selected = indices.first().copied().unwrap_or(0);
+                        }
                     } else {
                         m.sampler = navigation::pad_step(
                             m.sampler,
@@ -509,6 +664,12 @@ impl AppState {
                     (pos + 1).min(2)
                 };
                 m.tab = panels[next].into();
+                if m.tab == "library" {
+                    let indices = library_indices(&m);
+                    if !indices.contains(&m.selected) {
+                        m.selected = indices.first().copied().unwrap_or(0);
+                    }
+                }
             }
             "panel" => {
                 m.tab = if m.tab == "library" {
@@ -528,6 +689,15 @@ impl AppState {
                     if i < m.session.queue.len() {
                         m.session.queue.remove(i);
                     }
+                }
+            }
+            "queue_move" => {
+                let from = index.unwrap_or(0);
+                let to = v.max(0.) as usize;
+                if from < m.session.queue.len() && to < m.session.queue.len() && from != to {
+                    let path = m.session.queue.remove(from);
+                    m.session.queue.insert(to, path);
+                    m.last = "Sidelist order updated".into();
                 }
             }
             "load_selected" => {
@@ -584,7 +754,7 @@ impl AppState {
                 drop(m);
                 return self.sample_press(index).map(|_| ());
             }
-            "next_sample" => m.sampler = (m.sampler + 1) % 16,
+            "next_sample" => m.sampler = (m.sampler + 1) % sampler::SAMPLER_SLOTS,
             "stop_samples" => self.send(Cmd::StopSamples)?,
             "bpm" => {
                 if let Some(path) = m.loaded[d].clone() {
@@ -599,6 +769,12 @@ impl AppState {
                 }
             }
             "tempo_match" => {
+                if let Some(previous) = m.sync_restore[d] {
+                    self.send(Cmd::Rate(d, previous))?;
+                    m.sync_restore[d] = None;
+                    m.last = format!("Sync off → Deck {}", d + 1);
+                    return Ok(());
+                }
                 let a = m.loaded[d]
                     .as_ref()
                     .and_then(|p| m.session.library.iter().find(|t| &t.path == p))
@@ -612,7 +788,8 @@ impl AppState {
                     if !ratio.is_finite() || !(0.5..=1.5).contains(&ratio) {
                         return Err("Tempo sync exceeds the ±50% tempo range. Check the analyzed BPM values.".into());
                     }
-                    self.send(Cmd::Rate(d, ratio))?
+                    self.send(Cmd::Rate(d, ratio))?;
+                    m.sync_restore[d] = Some(m.view.decks[d].rate);
                 } else {
                     return Err("Analyze both loaded songs before using Sync. Sync matches tempo; beat-phase alignment is not available.".into());
                 }
@@ -625,17 +802,26 @@ impl AppState {
 }
 #[tauri::command]
 fn snapshot(s: tauri::State<Arc<AppState>>, library_revision: Option<u32>) -> Snapshot {
+    let analysis = s.analysis.lock().unwrap().clone();
+    let error = s.error.lock().unwrap().clone();
+    let recording = s.recorder.is_open();
+    let recording_path = s.recorder.path.lock().unwrap().clone();
+    let (mix_events, mix_log_path) = {
+        let log = s.mixlog.lock().unwrap();
+        (log.recent.clone(), log.last_path.clone())
+    };
     let m = s.model.lock().unwrap();
     Snapshot {
         auto_dj: m.auto_dj.enabled,
         auto_dj_status: m.auto_dj.status.clone(),
-        analysis: s.analysis.lock().unwrap().clone(),
+        analysis,
         preferences: m.session.preferences.clone(),
         sensitivity: m.session.sensitivity,
         library: (library_revision != Some(m.library_revision)).then(|| m.session.library.clone()),
         library_revision: m.library_revision,
         queue: m.session.queue.clone(),
         loaded: m.loaded.clone(),
+        synced: m.sync_restore.map(|rate| rate.is_some()),
         selected: m.selected,
         target: target(&m),
         shift: m.shift,
@@ -645,19 +831,22 @@ fn snapshot(s: tauri::State<Arc<AppState>>, library_revision: Option<u32>) -> Sn
         connected: m.connected,
         battery: m.battery,
         audio: m.view.clone(),
-        error: s.error.lock().unwrap().clone(),
+        error,
         device: s.device.clone(),
         sample_rate: s.rate,
         tab: m.tab.clone(),
-        recording: s.recorder.is_open(),
+        recording,
         recorded_seconds: s.recorder.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
             / s.rate as f64,
-        recording_path: s.recorder.path.lock().unwrap().clone(),
+        recording_path,
+        mix_events,
+        mix_log_path,
         mappings: m.session.mappings.clone(),
         sound_folder: m.session.sound_folder.clone(),
         sound_revision: m.sound_revision,
         music_roots: m.session.music_roots.clone(),
         library_folder: m.session.library_folder.clone(),
+        sampler_bank_focus: m.sampler_bank_focus,
     }
 }
 #[tauri::command]
@@ -673,10 +862,20 @@ fn command(
         "bpm",
         "queue_add",
         "queue_remove",
+        "queue_move",
         "sensitivity",
         "cue_seconds",
         "crossfade_seconds",
         "auto_dj_seconds",
+        "auto_dj_source",
+        "library_monitor",
+        "library_scan_minutes",
+        "auto_dj_crossfade_seconds",
+        "auto_dj_sample_count",
+        "auto_dj_sample_spacing",
+        "auto_dj_random_samples",
+        "normalize_tracks",
+        "effect_toggle",
     ]
     .contains(&action.as_str())
     {
@@ -761,6 +960,139 @@ async fn import_audio(s: tauri::State<'_, Arc<AppState>>, folder: bool) -> Resul
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+async fn refresh_library(s: tauri::State<'_, Arc<AppState>>) -> Result<usize, String> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || refresh_library_state(s))
+        .await
+        .map_err(|e| e.to_string())?
+}
+fn refresh_library_state(s: Arc<AppState>) -> Result<usize, String> {
+    let roots = s.model.lock().unwrap().session.music_roots.clone();
+    let mut paths = Vec::new();
+    let mut stack: Vec<PathBuf> = roots
+        .iter()
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .collect();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && !path.is_symlink() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| ["mp3", "wav"].contains(&x.to_ascii_lowercase().as_str()))
+            {
+                paths.push(path);
+            }
+        }
+    }
+    let present: std::collections::HashSet<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let existing: std::collections::HashSet<String> = s
+        .model
+        .lock()
+        .unwrap()
+        .session
+        .library
+        .iter()
+        .map(|t| t.path.clone())
+        .collect();
+    let mut found = Vec::new();
+    for path in paths {
+        let path = path.to_string_lossy().into_owned();
+        if existing.contains(&path) {
+            continue;
+        }
+        // Probe the complete stream before adding it, so a partially synced file waits for the next refresh.
+        if audio::visit_audio(&path, |_, _| Ok(())).is_ok() {
+            found.push(path);
+        }
+    }
+    let count = found.len();
+    let reachable_roots: Vec<String> = roots
+        .iter()
+        .filter(|r| PathBuf::from(r).is_dir())
+        .cloned()
+        .collect();
+    let mut changed = count > 0;
+    {
+        let mut m = s.model.lock().unwrap();
+        let selected_path = m.session.library.get(m.selected).map(|t| t.path.clone());
+        let before = m.session.library.len();
+        let protected: std::collections::HashSet<String> = m
+            .loaded
+            .iter()
+            .flatten()
+            .cloned()
+            .chain(m.session.queue.iter().cloned())
+            .collect();
+        m.session.library.retain(|track| {
+            if protected.contains(&track.path) {
+                return true;
+            }
+            let in_scanned_root = reachable_roots
+                .iter()
+                .any(|root| navigation::in_folder(&track.path, root));
+            !in_scanned_root || present.contains(&track.path)
+        });
+        changed |= before != m.session.library.len();
+        for path in found {
+            m.session.library.push(TrackInfo {
+                title: PathBuf::from(&path)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into(),
+                path,
+                ..Default::default()
+            });
+        }
+        if changed {
+            m.library_revision = m.library_revision.wrapping_add(1);
+        }
+        if let Some(path) = selected_path {
+            if let Some(index) = m.session.library.iter().position(|t| t.path == path) {
+                m.selected = index;
+            }
+        }
+    }
+    s.save()?;
+    if count > 0 {
+        start_analysis(s.clone(), false)?;
+    }
+    Ok(count)
+}
+fn start_library_monitor(s: Arc<AppState>) {
+    std::thread::spawn(move || {
+        let mut last_scan = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let (enabled, minutes) = {
+                let m = s.model.lock().unwrap();
+                (
+                    m.session.preferences.library_monitor,
+                    m.session.preferences.library_scan_minutes.max(1),
+                )
+            };
+            if enabled && last_scan.elapsed() >= std::time::Duration::from_secs(minutes as u64 * 60)
+            {
+                if let Err(error) = refresh_library_state(s.clone()) {
+                    *s.error.lock().unwrap() = format!("Library monitor: {error}");
+                }
+                last_scan = std::time::Instant::now();
+            }
+        }
+    });
+}
 #[tauri::command]
 async fn assign_sample(
     s: tauri::State<'_, Arc<AppState>>,
@@ -769,7 +1101,7 @@ async fn assign_sample(
 ) -> Result<(), String> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if index >= 16 {
+        if index >= sampler::SAMPLER_SLOTS {
             return Err("Invalid sample pad".into());
         }
         let p = if let Some(path) = path {
@@ -808,7 +1140,10 @@ impl AppState {
             let mut m = self.model.lock().unwrap();
             m.samples.resize(sampler::SAMPLER_SLOTS, None);
             m.session.pad_paths.resize(sampler::SAMPLER_SLOTS, None);
-            m.session.preferences.sampler_modes.resize(sampler::SAMPLER_SLOTS, sampler::PlayMode::Restart);
+            m.session
+                .preferences
+                .sampler_modes
+                .resize(sampler::SAMPLER_SLOTS, sampler::PlayMode::Restart);
         }
         let index = index
             .or_else(|| {
@@ -856,7 +1191,10 @@ impl AppState {
             let mut m = self.model.lock().unwrap();
             m.samples.resize(sampler::SAMPLER_SLOTS, None);
             m.session.pad_paths.resize(sampler::SAMPLER_SLOTS, None);
-            m.session.preferences.sampler_modes.resize(sampler::SAMPLER_SLOTS, sampler::PlayMode::Restart);
+            m.session
+                .preferences
+                .sampler_modes
+                .resize(sampler::SAMPLER_SLOTS, sampler::PlayMode::Restart);
             m.samples[index] = Some(path.clone());
             if focus {
                 m.sampler = index;
@@ -898,6 +1236,88 @@ fn save_mappings(
 #[tauri::command]
 fn default_mappings() -> mapping::Mappings {
     mapping::Mappings::default()
+}
+#[derive(Serialize, Deserialize)]
+struct PortableMappingProfile {
+    format: String,
+    version: u8,
+    name: String,
+    mappings: mapping::Mappings,
+}
+#[tauri::command]
+async fn export_mapping_profile(
+    s: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<String>, String> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let profile = {
+            let m = s.model.lock().unwrap();
+            PortableMappingProfile {
+                format: "skydek-mapping-profile".into(),
+                version: 1,
+                name: m.session.preferences.active_profile.clone(),
+                mappings: m.session.mappings.clone(),
+            }
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(format!("{}.skydek-map.json", profile.name))
+            .add_filter("SkyDek mapping", &["json"])
+            .save_file()
+        else {
+            return Ok(None);
+        };
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&profile).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+async fn import_mapping_profile(
+    s: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<String>, String> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("SkyDek mapping", &["json"])
+            .pick_file()
+        else {
+            return Ok(None);
+        };
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("Mapping file exceeds 1 MiB".into());
+        }
+        let profile: PortableMappingProfile =
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if profile.format != "skydek-mapping-profile" || profile.version != 1 {
+            return Err("Not a supported SkyDek mapping file".into());
+        }
+        profile.mappings.validate()?;
+        let base = profile.name.trim();
+        if base.is_empty() || base.len() > 65 {
+            return Err("Mapping profile name is invalid".into());
+        }
+        let name = {
+            let m = s.model.lock().unwrap();
+            if !m.session.preferences.profiles.contains_key(base) {
+                base.to_owned()
+            } else {
+                (2..=100)
+                    .map(|n| format!("{base} ({n})"))
+                    .find(|candidate| !m.session.preferences.profiles.contains_key(candidate))
+                    .ok_or("Too many profiles with this name")?
+            }
+        };
+        s.profile("save".into(), name.clone(), Some(profile.mappings))?;
+        Ok(Some(name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1281,7 +1701,7 @@ fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
 
 #[tauri::command]
 fn clear_sample(s: tauri::State<Arc<AppState>>, index: usize) -> Result<(), String> {
-    if index >= 16 {
+    if index >= sampler::SAMPLER_SLOTS {
         return Err("Invalid sampler pad".into());
     }
     let _guard = s.sample_guard.lock().unwrap();
@@ -1310,7 +1730,7 @@ impl AppState {
         mode: sampler::PlayMode,
         all: bool,
     ) -> Result<(), String> {
-        if index >= 16 {
+        if index >= sampler::SAMPLER_SLOTS {
             return Err("Invalid sampler pad".into());
         }
         let _guard = self.sample_guard.lock().unwrap();
@@ -1347,6 +1767,15 @@ fn worker(s: Arc<AppState>) {
             while let Some(v) = s.views.pop() {
                 let mut m = s.model.lock().unwrap();
                 m.view = v.clone();
+                if s.recorder.is_open() {
+                    let seconds = s.recorder.frames.load(std::sync::atomic::Ordering::Relaxed)
+                        as f64
+                        / s.rate as f64;
+                    s.mixlog
+                        .lock()
+                        .unwrap()
+                        .capture(seconds, &v, &m.loaded, &m.samples);
+                }
                 auto_dj::acknowledge(&mut m);
                 for d in 0..2 {
                     if let Some(pending) = &m.pending_loads[d] {
@@ -1354,12 +1783,14 @@ fn worker(s: Arc<AppState>) {
                             1 if Arc::as_ptr(&pending.track) as usize == v.decks[d].track_id => {
                                 let pending = m.pending_loads[d].take().unwrap();
                                 m.loaded[d] = Some(pending.path.clone());
+                                m.sync_restore[d] = None;
                                 m.cache.insert(pending.path, pending.track);
                                 m.last = format!("Load → Deck {}", d + 1);
                             }
                             2 => {
                                 m.pending_loads[d] = None;
-                                m.last = "Playing deck protected. Retry or confirm replacement.".into();
+                                m.last =
+                                    "Playing deck protected. Retry or confirm replacement.".into();
                             }
                             _ => {}
                         }
@@ -1372,7 +1803,8 @@ fn worker(s: Arc<AppState>) {
                             continue;
                         }
                         if let Some(t) = m.session.library.iter_mut().find(|t| t.path == p) {
-                            let cue_changed = t.cues != v.decks[d].hot || t.main_cue != v.decks[d].cue;
+                            let cue_changed =
+                                t.cues != v.decks[d].hot || t.main_cue != v.decks[d].cue;
                             t.cues = v.decks[d].hot;
                             t.main_cue = v.decks[d].cue;
                             if t.waveform.is_empty() {
@@ -1455,8 +1887,12 @@ fn worker(s: Arc<AppState>) {
                             holds.insert(control.to_string(), HeldAction::Cue(deck));
                             s.action("cue_hold_down", Some(deck), None, None)
                         } else if let Some(effect) = effect_id(&action) {
-                            holds.insert(control.to_string(), HeldAction::Effect(deck, effect));
-                            s.send(Cmd::FxGate(deck, effect, true))
+                            if s.model.lock().unwrap().session.preferences.effect_toggle {
+                                s.send(Cmd::FxToggle(deck, effect))
+                            } else {
+                                holds.insert(control.to_string(), HeldAction::Effect(deck, effect));
+                                s.send(Cmd::FxGate(deck, effect, true))
+                            }
                         } else if action == "sample" {
                             s.sample_press(None).map(|(index, mode)| {
                                 if mode == sampler::PlayMode::Hold {
@@ -1551,28 +1987,58 @@ fn worker(s: Arc<AppState>) {
     });
 }
 #[tauri::command]
+async fn choose_record_path(format: String) -> Result<Option<String>, String> {
+    if !["wav", "mp3"].contains(&format.as_str()) {
+        return Err("Choose WAV or MP3 recording format".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_file_name(format!("SkyDek Mix.{format}"))
+            .add_filter(
+                if format == "mp3" { "MP3" } else { "WAV" },
+                &[format.as_str()],
+            )
+            .save_file()
+            .map(|path| path.with_extension(format).to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+#[tauri::command]
 async fn record(
     s: tauri::State<'_, Arc<AppState>>,
     start: bool,
     format: Option<String>,
+    path: Option<String>,
 ) -> Result<(), String> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         if start {
-            let format = format.as_deref().unwrap_or("wav");
+            let format = format.as_deref().unwrap_or("mp3");
             if !["wav", "mp3"].contains(&format) {
                 return Err("Choose WAV or MP3 recording format".into());
             }
-            let Some(path) = rfd::FileDialog::new()
-                .set_file_name(format!("SkyDek Mix.{format}"))
-                .add_filter(if format == "mp3" { "MP3" } else { "WAV" }, &[format])
-                .save_file()
-            else {
+            let path = if let Some(path) = path {
+                Some(PathBuf::from(path))
+            } else {
+                rfd::FileDialog::new()
+                    .set_file_name(format!("SkyDek Mix.{format}"))
+                    .add_filter(if format == "mp3" { "MP3" } else { "WAV" }, &[format])
+                    .save_file()
+            };
+            let Some(path) = path else {
                 return Ok(());
             };
-            s.recorder.start(path.with_extension(format), s.rate)
+            let path = path.with_extension(format);
+            s.recorder.start(path.clone(), s.rate)?;
+            s.mixlog
+                .lock()
+                .unwrap()
+                .start(path.to_string_lossy().into_owned());
+            Ok(())
         } else {
-            s.recorder.stop()
+            s.recorder.stop()?;
+            s.mixlog.lock().unwrap().finish().map(|_| ())
         }
     })
     .await
@@ -1580,6 +2046,7 @@ async fn record(
 }
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let initial_dek = mix_editor::dek_argument(&args);
     if let Some(i) = args.iter().position(|a| a == "--verify") {
         let dir = PathBuf::from(
             args.get(i + 1)
@@ -1594,17 +2061,24 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if let Some(path) = mix_editor::dek_argument(&args) {
+                *app.state::<mix_editor::PendingOpen>().0.lock().unwrap() = Some(path);
+            }
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
             }
         }))
-        .setup(|app| {
+        .setup(move |app| {
+            app.manage(mix_editor::PendingOpen(std::sync::Mutex::new(
+                initial_dek.clone(),
+            )));
+            app.manage(Arc::new(mix_editor::RenderStatus::default()));
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let (path, mut session, session_warning) = open_session(&dir)
-                .map_err(std::io::Error::other)?;
+            let (path, mut session, session_warning) =
+                open_session(&dir).map_err(std::io::Error::other)?;
             if session.mappings.validate().is_err() {
                 session.mappings = mapping::Mappings::default();
             }
@@ -1634,6 +2108,14 @@ fn main() {
             let samples = session.pad_paths.clone();
             let commands = Arc::new(ArrayQueue::new(256));
             let _ = commands.push(Cmd::CueSeconds(session.preferences.cue_seconds));
+            let _ = commands.push(Cmd::Normalize(session.preferences.normalize_tracks));
+            let _ = commands.push(Cmd::SamplerVolume(
+                session.preferences.sampler_volume as f32,
+            ));
+            let _ = commands.push(Cmd::MicVolume(session.preferences.mic_volume as f32));
+            let _ = commands.push(Cmd::MicMute(session.preferences.mic_mute));
+            let _ = commands.push(Cmd::MicDucking(session.preferences.mic_ducking));
+            let _ = commands.push(Cmd::Linear(session.preferences.linear_curve));
             let views = Arc::new(ArrayQueue::new(16));
             let error = Arc::new(Mutex::new(session_warning));
             let recorder = recording::Recorder::new();
@@ -1649,7 +2131,11 @@ fn main() {
                     return Err(cause);
                 }
                 let fallback = audio::start_on_device(
-                    commands.clone(), views.clone(), error.clone(), recorder.clone(), None,
+                    commands.clone(),
+                    views.clone(),
+                    error.clone(),
+                    recorder.clone(),
+                    None,
                 )?;
                 let mut warning = error.lock().unwrap();
                 if !warning.is_empty() {
@@ -1674,6 +2160,7 @@ fn main() {
                     session,
                     cache: HashMap::new(),
                     loaded: [None, None],
+                    sync_restore: [None, None],
                     pending_loads: [None, None],
                     library_revision: 0,
                     selected: 0,
@@ -1688,6 +2175,10 @@ fn main() {
                     view: View::default(),
                     tab: "library".into(),
                     library_query: String::new(),
+                    library_sort: "title".into(),
+                    library_desc: false,
+                    library_order: Vec::new(),
+                    sampler_bank_focus: false,
                 }),
                 commands,
                 views,
@@ -1696,11 +2187,13 @@ fn main() {
                 device,
                 rate,
                 recorder,
+                mixlog: Mutex::new(mixlog::Manager::default()),
                 save_guard: Mutex::new(()),
                 sample_guard: Mutex::new(()),
             });
             worker(state.clone());
             auto_dj::start(state.clone());
+            start_library_monitor(state.clone());
             start_analysis(state.clone(), false)?;
             let restore = state.clone();
             std::thread::spawn(move || {
@@ -1765,7 +2258,8 @@ fn main() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = e {
                         api.prevent_close();
                         if let Err(error) = state.save() {
-                            *state.error.lock().unwrap() = format!("Could not save session: {error}");
+                            *state.error.lock().unwrap() =
+                                format!("Could not save session: {error}");
                             return;
                         }
                         let _ = copy.hide();
@@ -1786,6 +2280,7 @@ fn main() {
             snapshot,
             command,
             import_audio,
+            refresh_library,
             load_track,
             assign_sample,
             add_sample,
@@ -1797,14 +2292,28 @@ fn main() {
             select_audio_device,
             toggle_fullscreen,
             library_view,
+            track_artwork,
             save_mappings,
             default_mappings,
+            export_mapping_profile,
+            import_mapping_profile,
             mapping_profile,
             import_sound_folder,
             sound_files,
             analyze_library,
             waveform_data,
-            record
+            choose_record_path,
+            record,
+            mix_editor::mix_editor_open,
+            mix_editor::mix_editor_import_legacy,
+            mix_editor::mix_editor_save,
+            mix_editor::mix_editor_sources,
+            mix_editor::mix_editor_relink,
+            mix_editor::mix_editor_render,
+            mix_editor::mix_editor_preview,
+            mix_editor::mix_editor_take_open,
+            mix_editor::mix_editor_render_status,
+            mix_editor::mix_editor_cancel_render
         ])
         .run(tauri::generate_context!())
         .expect("SkyDek DJ failed to start");
@@ -1858,6 +2367,7 @@ mod integration_tests {
                 session: Session::default(),
                 cache: HashMap::new(),
                 loaded: [None, None],
+                sync_restore: [None, None],
                 pending_loads: [None, None],
                 library_revision: 0,
                 selected: 0,
@@ -1872,6 +2382,10 @@ mod integration_tests {
                 view: View::default(),
                 tab: "library".into(),
                 library_query: String::new(),
+                library_sort: "title".into(),
+                library_desc: false,
+                library_order: Vec::new(),
+                sampler_bank_focus: false,
             }),
             commands: Arc::new(ArrayQueue::new(256)),
             views: Arc::new(ArrayQueue::new(16)),
@@ -1880,6 +2394,7 @@ mod integration_tests {
             device: String::new(),
             rate: 48000,
             recorder: recording::Recorder::new(),
+            mixlog: Mutex::new(mixlog::Manager::default()),
             save_guard: Mutex::new(()),
             sample_guard: Mutex::new(()),
         };
@@ -1927,7 +2442,9 @@ mod integration_tests {
         let persisted: Session =
             serde_json::from_slice(&std::fs::read(&state.path).unwrap()).unwrap();
         assert_eq!(persisted.pad_paths[3].as_deref(), sound.to_str());
-        assert!(state.assign(sampler::SAMPLER_SLOTS, sound.to_string_lossy().into()).is_err());
+        assert!(state
+            .assign(sampler::SAMPLER_SLOTS, sound.to_string_lossy().into())
+            .is_err());
         state.action("sample", None, None, Some(3)).unwrap();
         assert!(matches!(
             state.commands.pop(),
@@ -1951,6 +2468,17 @@ mod integration_tests {
         state.action("sample_select", None, None, Some(1)).unwrap();
         state.action("browse", None, Some(1.), None).unwrap();
         assert_eq!(state.model.lock().unwrap().sampler, 5);
+        state.action("bank_select", None, None, Some(1)).unwrap();
+        assert_eq!(state.model.lock().unwrap().sampler, 21);
+        state.action("panel_right", None, None, None).unwrap();
+        assert_eq!(state.model.lock().unwrap().sampler, 37);
+        state.action("browse", None, Some(1.), None).unwrap();
+        assert!(!state.model.lock().unwrap().sampler_bank_focus);
+        state.action("browse", None, Some(-1.), None).unwrap();
+        assert_eq!(state.model.lock().unwrap().sampler, 33);
+        state.action("browse", None, Some(-1.), None).unwrap();
+        assert!(state.model.lock().unwrap().sampler_bank_focus);
+        state.action("sample_select", None, None, Some(5)).unwrap();
         state.action("panel_right", None, None, None).unwrap();
         assert_eq!(state.model.lock().unwrap().sampler, 6);
         state.action("panel_left", None, None, None).unwrap();
@@ -2027,7 +2555,7 @@ mod integration_tests {
             [sampler::PlayMode::Overlap; sampler::SAMPLER_SLOTS]
         );
         assert!(state
-            .set_sampler_mode(16, sampler::PlayMode::Hold, false)
+            .set_sampler_mode(sampler::SAMPLER_SLOTS, sampler::PlayMode::Hold, false)
             .is_err());
         {
             let mut m = state.model.lock().unwrap();
@@ -2065,6 +2593,8 @@ mod integration_tests {
         }
         state.action("tempo_match", Some(0), None, None).unwrap();
         assert!(matches!(state.commands.pop(),Some(Cmd::Rate(0, r)) if (r-143./120.).abs()<1e-9));
+        state.action("tempo_match", Some(0), None, None).unwrap();
+        assert!(matches!(state.commands.pop(), Some(Cmd::Rate(0, r)) if (r-1.).abs()<1e-9));
         {
             let mut m = state.model.lock().unwrap();
             let t = m
@@ -2094,6 +2624,32 @@ mod integration_tests {
                 .bpm = None;
         }
         assert!(state.action("tempo_match", Some(0), None, None).is_err());
+        {
+            let mut m = state.model.lock().unwrap();
+            m.session.library = [
+                ("C:/Music/A/first.wav", "First"),
+                ("C:/Music/B/other.wav", "Other"),
+                ("C:/Music/A/last.wav", "Last"),
+            ]
+            .map(|(path, title)| TrackInfo {
+                path: path.into(),
+                title: title.into(),
+                ..Default::default()
+            })
+            .into();
+            m.session.library_folder = "C:/Music/A".into();
+            m.library_order = vec![2, 0];
+            m.library_query.clear();
+            m.tab = "library".into();
+            m.selected = 2;
+            assert_eq!(library_indices(&m), vec![2, 0]);
+        }
+        state.action("browse", None, Some(1.), None).unwrap();
+        assert_eq!(state.model.lock().unwrap().selected, 0);
+        state.action("focus_folders", None, None, None).unwrap();
+        let before = state.model.lock().unwrap().selected;
+        state.action("browse", None, Some(1.), None).unwrap();
+        assert_eq!(state.model.lock().unwrap().selected, before);
         std::fs::remove_file(root.join("session.json")).unwrap();
         std::fs::remove_file(root.join("session.backup.json")).unwrap();
         std::fs::remove_file(root.join("ignored.txt")).unwrap();

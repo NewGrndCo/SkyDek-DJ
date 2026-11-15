@@ -4,7 +4,11 @@
 
 SkyDek DJ supports Windows and macOS. Windows installers use the NSIS package. macOS builds are produced on an Apple-hosted GitHub Actions runner as a native `.dmg`, because Apple’s packaging and signing toolchain is required for a distributable Mac application. On macOS, run `npm run package:mac` to build locally, or push a version tag to use the included workflow.
 
-SkyDek DJ is a standalone desktop DJ workstation by New Ground Enterprise. It supports Windows and macOS and does not require VirtualDJ or loopMIDI.
+SkyDek DJ is a standalone desktop DJ workstation by New Ground Media. It supports Windows and macOS and does not require VirtualDJ or loopMIDI.
+
+## Current Windows release
+
+Version **0.10.18** adds safe double-click deck loading, live function labels on the virtual Xbox controller, and the latest beta-tested Mix Editor improvements. Existing signed Windows installations can use **Check for updates** to download and verify the new release.
 
 ## Development and verification
 
@@ -33,7 +37,7 @@ Approximate BPM values are marked with ~. Some music has no reliable estimate, a
 
 ## Decks and waveforms
 
-Load a track using its 1 or 2 button, or use A on the controller for a preparation deck. Playing decks reject unconfirmed controller replacement; explicit mouse replacement requires confirmation.
+Load a track using its 1 or 2 button, drag it onto a deck, or use A on the controller for a preparation deck. Double-clicking a library track prefers an empty deck, otherwise uses a stopped deck, and never replaces a playing deck. Explicit numbered-button replacement of a playing deck still requires confirmation.
 
 Click a waveform to seek. Drag the stacked waveform or a deck waveform left/right to scrub its playhead. Use the wheel or −/+ controls to zoom. Stacked waveforms share a zoom span; deck overviews have independent zoom and a Fit action. Arrow keys move 50 ms on a focused waveform; Shift+arrow moves one second. SET CUE places the main cue mark at the current position. Three hot cue buttons set or recall marks; Shift-click clears with confirmation.
 
@@ -50,7 +54,7 @@ Default Normal assignments:
 - LB/RB: backspin/brake; Menu: target deck; View: Shift toggle.
 - Shift includes explicit deck loading, echo/reverb, tempo matching, and next sample.
 
-Settings → SkyDek Mapper manages both mapping layers and saved named profiles. The live Xbox artwork highlights input. Saved user assignments override defaults. The Xbox Share button is reserved by Windows and is not exposed by XInput. Connection transport is not guessed. Battery is an approximate driver-reported level when available.
+Settings → Xbox Controller → SkyDek Mapper manages both mapping layers and saved named profiles. The live Xbox artwork highlights physical input and displays the active function beside each mapped button. Labels follow the active Normal or Shift layer and custom profiles. Saved user assignments override defaults. The Xbox Share button is reserved by Windows and is not exposed by XInput. Connection transport is not guessed.
 
 Stick-clicks suppress that stick's axes until released and centered. Center both sticks after reconnecting. Crossfader position stays where released. General settings configures stick sensitivity and automatic-crossfade duration.
 

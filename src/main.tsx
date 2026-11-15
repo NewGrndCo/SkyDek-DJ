@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
 import {
   Settings,
   Folder,
@@ -15,12 +16,14 @@ import {
   Radio,
   Disc3,
   Volume2,
+  RefreshCw,
 } from "lucide-react";
 import "./style.css";
 import "./premium.css";
 import "./workspace.css";
 import "./theme.css";
 import "./feedback.css";
+import "./visual-repass.css";
 import { DeckGlow } from "./DeckGlow";
 import { MidiPanel } from "./MidiPanel";
 import { Wave } from "./Waveform";
@@ -33,7 +36,10 @@ import { FolderTree, inFolder } from "./FolderTree";
 import { type Mappings } from "./MapperPanel";
 import { SettingsPanel, type SettingsSkin } from "./SettingsPanel";
 import { BrandMark } from "./BrandMark";
+import { MixEditor, type OpenedMixSession } from "./MixEditor";
 import { SoundBrowser, type SoundFile } from "./SoundBrowser";
+import { SignalLockSplash } from "./SignalLockSplash";
+import { chooseSmartLoadDeck } from "./smartDeckLoad";
 type Track = {
   path: string;
   title: string;
@@ -71,6 +77,7 @@ type Snapshot = {
   library: Track[];
   queue: string[];
   loaded: (string | null)[];
+  synced: boolean[];
   selected: number;
   target: number;
   shift: boolean;
@@ -95,11 +102,14 @@ type Snapshot = {
   recording: boolean;
   recorded_seconds: number;
   recording_path: string;
+  mix_events: {seconds:number;label:string}[];
+  mix_log_path: string;
   mappings: Mappings;
   sound_folder: string | null;
   sound_revision: number;
   music_roots: string[];
   library_folder: string;
+  sampler_bank_focus: boolean;
 };
 const time = (s: number) =>
   `${Math.floor(s / 60)}:${Math.floor(s % 60)
@@ -115,10 +125,27 @@ function App() {
     [settings, setSettings] = useState(false),
     [bottom, setBottom] = useState("sampler"),
     [recordPending, setRecordPending] = useState(false);
+  const [loadedFeedback, setLoadedFeedback] = useState<number | null>(null);
+  const [loadNotice, setLoadNotice] = useState("");
+  const loadFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [recordPath, setRecordPath] = useState<string | null>(null);
+  const [showSplash, setShowSplash] = useState(true);
+  const [replayOpen,setReplayOpen] = useState(false);
+  const [pendingMixSession,setPendingMixSession]=useState<OpenedMixSession|null>(null);
+  useEffect(()=>{let active=true;const check=()=>invoke<OpenedMixSession|null>("mix_editor_take_open").then(opened=>{if(active&&opened){setPendingMixSession(opened);setSettings(false);setReplayOpen(true);}}).catch(()=>{});void check();const timer=setInterval(check,1000);return()=>{active=false;clearInterval(timer);};},[]);
+  const [highlightArtwork,setHighlightArtwork]=useState<string|null>(null);
+  const [autoMenu,setAutoMenu]=useState<{x:number;y:number}|null>(null);
+  const artworkCache=useRef(new Map<string,string|null>());
+  const artworkCacheBytes=useRef(0);
+  const mixLogViewport=useRef<HTMLDivElement>(null);
+  useEffect(()=>{const open=()=>{setSettings(false);setReplayOpen(true);};window.addEventListener("skydek-open-replay",open);return()=>window.removeEventListener("skydek-open-replay",open);},[]);
+  const [updateStatus, setUpdateStatus] = useState("");
+  const [sort, setSort] = useState<{key:"title"|"bpm"|"duration"; direction:1|-1}>({key:"title",direction:1});
+  const [glow, setGlow] = useState<"light"|"medium"|"heavy">(() => (localStorage.getItem("skydek-glow") as "light"|"medium"|"heavy") || "medium");
   const [waveSpan,setWaveSpan] = useState(16);
   const [skin, setSkin] = useState<SettingsSkin>(() => {
     const saved = localStorage.getItem("skydek-theme");
-    return saved === "light" || saved === "xbox" || saved === "matrix" ? saved : "dark";
+    return saved === "light" || saved === "xbox" ? saved : "dark";
   });
   const [reducedMotion, setReducedMotion] = useState(() => {
     const saved = localStorage.getItem("skydek-reduced-motion");
@@ -130,39 +157,30 @@ function App() {
   const [recordFormat,setRecordFormat] = useState<"wav"|"mp3">("mp3");
   const [recordBusy,setRecordBusy] = useState(false);
   useEffect(() => {
-    if (!recordPending || s?.recording) return;
+    if (!recordPending || !recordPath || s?.recording) return;
     if ((s?.audio.peak ?? 0) < 0.005) return;
     setRecordPending(false);
     setRecordBusy(true);
-    void invoke("record", { start: true, format: recordFormat })
+    void invoke("record", { start: true, format: recordFormat, path: recordPath })
       .catch(e => setError(String(e)))
       .finally(() => setRecordBusy(false));
-  }, [recordPending, s?.audio.peak, s?.recording, recordFormat]);
+  }, [recordPending, recordPath, s?.audio.peak, s?.recording, recordFormat]);
   useEffect(() => {
     localStorage.setItem("skydek-theme", skin);
     document.documentElement.style.colorScheme = skin === "dark" ? "dark" : "light";
   }, [skin]);
   const [samplerEdit, setSamplerEdit] = useState(false);
-  const [samplerBank, setSamplerBank] = useState(0);
+  const samplerBank = Math.floor((s?.sampler ?? 0) / 16);
   const heldPads = useRef<boolean[]>(Array(48).fill(false));
   async function changeSamplerMode(mode: Preferences["sampler_modes"][number], all = false) {
     try { await invoke("sampler_mode", { index: s?.sampler || 0, mode, all }); setError(""); }
     catch(e) { setError(String(e)); }
   }
   useEffect(() => {
-    if (!s) return;
-    const timer = setTimeout(() => {
-      void invoke("library_view", { folder: folderFilter, query }).catch((e) =>
-        setError(String(e)),
-      );
-    }, 150);
-    return () => clearTimeout(timer);
-  }, [folderFilter, query]);
-  useEffect(() => {
     for (const [selector, parent] of [
-      ['[data-selected-track="true"]', ".track-table"],
-      ['[data-selected-pad="true"]', ".sideview"],
-      [".folders .selected-folder", ".folder-tree"],
+      ...(s?.tab === "library" ? [['[data-selected-track="true"]', ".track-table"]] : []),
+      ...(s?.tab === "sampler" ? [['[data-selected-pad="true"]', ".sideview"]] : []),
+      ...(s?.tab === "folders" ? [[".folders .selected-folder", ".folder-tree"]] : []),
     ]) {
       const el = document.querySelector(selector),
         container = el?.closest(parent);
@@ -174,7 +192,7 @@ function App() {
           container.scrollTop += a.bottom - b.bottom;
       }
     }
-  }, [s?.selected, s?.sampler, s?.library_folder]);
+  }, [s?.selected, s?.sampler, s?.library_folder, s?.tab]);
   const [assigning, setAssigning] = useState<number | null>(null);
   useEffect(() => {
     if (s) setFolderFilter(s.library_folder);
@@ -319,11 +337,31 @@ function App() {
     try {
       await invoke("load_track", { path, deck, force });
       setError("");
+      setLoadedFeedback(deck);
+      setLoadNotice(`Loaded into DEK ${deck + 1}`);
+      if (loadFeedbackTimer.current) clearTimeout(loadFeedbackTimer.current);
+      loadFeedbackTimer.current = setTimeout(() => { setLoadedFeedback(null); setLoadNotice(""); }, 1800);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
+  };
+  useEffect(() => () => { if (loadFeedbackTimer.current) clearTimeout(loadFeedbackTimer.current); }, []);
+  const smartLoad = async (path: string) => {
+    if (!s) return;
+    const deck = chooseSmartLoadDeck({
+      loaded: s.loaded,
+      playing: s.audio.decks.map((candidate) => candidate.playing),
+      lastSelected: s.target,
+    });
+    if (deck === null) {
+      setLoadNotice("Both DEKs are playing — no track was replaced");
+      if (loadFeedbackTimer.current) clearTimeout(loadFeedbackTimer.current);
+      loadFeedbackTimer.current = setTimeout(() => setLoadNotice(""), 2400);
+      return;
+    }
+    await load(path, deck);
   };
   const imp = async (folder = false) => {
     setBusy(true);
@@ -337,15 +375,53 @@ function App() {
     }
   };
   const library = s?.library;
+  const highlightedTrack=s?.library[s.selected];
+  useEffect(()=>{
+    const path=highlightedTrack?.path;
+    if(!path){setHighlightArtwork(null);return;}
+    if(artworkCache.current.has(path)){
+      const cached=artworkCache.current.get(path)??null;
+      artworkCache.current.delete(path);artworkCache.current.set(path,cached);
+      setHighlightArtwork(cached);return;
+    }
+    let current=true;
+    void invoke<string|null>("track_artwork",{path}).then(value=>{
+      const cacheLimit=16*1024*1024, bytes=value?.length??0;
+      if(bytes<=cacheLimit){
+        artworkCache.current.set(path,value);artworkCacheBytes.current+=bytes;
+        while(artworkCacheBytes.current>cacheLimit&&artworkCache.current.size){
+          const oldest=artworkCache.current.keys().next().value!;
+          artworkCacheBytes.current-=artworkCache.current.get(oldest)?.length??0;
+          artworkCache.current.delete(oldest);
+        }
+      }
+      if(current)setHighlightArtwork(value);
+    }).catch(()=>{artworkCache.current.set(path,null);if(current)setHighlightArtwork(null);});
+    return()=>{current=false;};
+  },[highlightedTrack?.path]);
   const libraryPaths = useMemo(() => library?.map(track => track.path) ?? [], [library]);
   const visibleTracks = useMemo(() => {
     const search = query.toLowerCase();
-    return (library ?? []).flatMap((track, index) =>
-      inFolder(track.path, folderFilter) && track.title.toLowerCase().includes(search)
+    const matches = (library ?? []).flatMap((track, index) =>
+      inFolder(track.path, folderFilter) && (track.title.toLowerCase().includes(search) || track.path.toLowerCase().includes(search))
         ? [{ track, index }]
         : [],
     );
-  }, [library, folderFilter, query]);
+    return matches.sort((a,b) => sort.direction * (sort.key === "title" ? a.track.title.localeCompare(b.track.title, undefined, {numeric:true}) : ((a.track[sort.key] || 0) - (b.track[sort.key] || 0))));
+  }, [library, folderFilter, query, sort]);
+  useEffect(() => {
+    if (!s) return;
+    const timer = setTimeout(() => {
+      void invoke("library_view", { folder: folderFilter, query, sort: sort.key, descending: sort.direction < 0, order: visibleTracks.map(entry=>entry.index) }).catch((e) => setError(String(e)));
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [folderFilter, query, sort, visibleTracks]);
+  const toggleSort = (key: typeof sort.key) => setSort(previous => ({key, direction: previous.key === key ? (previous.direction === 1 ? -1 : 1) : 1}));
+  const dropTrack = (event: React.DragEvent, deck: number) => {
+    event.preventDefault();
+    const path = event.dataTransfer.getData("application/x-skydek-track") || event.dataTransfer.getData("text/plain");
+    if (libraryPaths.includes(path)) void load(path, deck);
+  };
   const seekWave = (deck: number, seconds: number, dragged?: boolean) => {
     lastScrubbedDeck.current = dragged ? deck : null;
     return cmd(dragged ? "scrub_end" : "seek", deck, seconds);
@@ -356,7 +432,7 @@ function App() {
     const a = s?.audio.decks[d],
       t = trackFor(d);
     return (
-      <section className={`deck deck${d + 1} panel`} key={d}>
+      <section className={`deck deck${d + 1} panel ${loadedFeedback === d ? "just-loaded" : ""}`} key={d} onDragOver={e => e.preventDefault()} onDrop={e => dropTrack(e,d)}>
         <div className="deck-title">
           <button className="deck-tag" onClick={() => cmd("target", d)}>
             DEK {d + 1}
@@ -381,7 +457,7 @@ function App() {
           <div className="fx">
             <span className="caption">AUDIO FX</span>
             {["backspin", "brake", "start", "echo", "reverb"].map((f, effect) => (
-              <HoldButton disabled={!t} key={f} className={a?.effect === effect + 1 ? "active" : ""} aria-pressed={a?.effect === effect + 1} onPress={() => void cmd("fx_down", d, undefined, effect + 1)} onRelease={() => void cmd("fx_up", d, undefined, effect + 1)}>
+              <HoldButton disabled={!t} key={f} className={a?.effect === effect + 1 ? "active" : ""} aria-pressed={a?.effect === effect + 1} onPress={() => void cmd(s?.preferences.effect_toggle ? "fx_toggle" : "fx_down", d, undefined, effect + 1)} onRelease={() => { if(!s?.preferences.effect_toggle) void cmd("fx_up", d, undefined, effect + 1); }}>
                 {f === "start" ? "BRAKE START" : f.toUpperCase()}
               </HoldButton>
             ))}
@@ -474,8 +550,10 @@ function App() {
           </button>
           <button
             disabled={!t?.bpm || !trackFor(1-d)?.bpm}
+            className={s?.synced[d] ? "active" : undefined}
+            aria-pressed={s?.synced[d] || false}
             onClick={() => cmd("tempo_match", d)}
-            title="Sync this deck’s tempo to the other deck’s current BPM. Analyze both songs first. Tempo matching changes pitch; beat-phase alignment is not included."
+            title={s?.synced[d] ? "Restore the tempo this deck had before Sync" : "Match this deck’s tempo to the other deck. Click again to undo. Beat-phase alignment is not included."}
           >
             SYNC
           </button>
@@ -516,7 +594,15 @@ function App() {
     );
   };
   return (
-    <main style={panelLayout.style} data-theme={skin === "dark" ? "dark" : "light"} data-skin={skin} data-motion={reducedMotion ? "reduced" : "full"}>
+    <main style={panelLayout.style} data-glow={glow} data-theme={skin === "dark" ? "dark" : "light"} data-skin={skin} data-motion={reducedMotion ? "reduced" : "full"}>
+      {showSplash && (
+        <SignalLockSplash
+          ready={Boolean(s)}
+          connected={Boolean(s?.connected)}
+          reducedMotion={reducedMotion}
+          onFinished={() => setShowSplash(false)}
+        />
+      )}
       <header>
         <img className="brand-logo" src="/brand.png" alt="SkyDek DJ" />
         <span className="divider" />
@@ -524,26 +610,20 @@ function App() {
           <span className="connection-pulse" aria-hidden="true" />
           {s?.connected ? "Xbox controller" : "Controller disconnected"}
         </span>
-        <div className="header-right">
+        <div className="header-left-actions">
           <button
             aria-pressed={s?.auto_dj ?? false}
-            className={s?.auto_dj ? "active" : undefined}
+            className={`auto-dj-button ${s?.auto_dj ? "active" : ""}`}
             title={s?.auto_dj_status || "Mix tracks from the playing track's folder"}
             onClick={() => cmd("auto_dj", undefined, s?.auto_dj ? 0 : 1)}
+            onContextMenu={(e)=>{e.preventDefault();setAutoMenu({x:e.clientX,y:e.clientY});}}
           >
             Auto DJ
           </button>
-          <button className="update-header-button" title="Check for application updates" onClick={() => { setSettings(true); setTimeout(() => window.dispatchEvent(new Event("skydek-check-updates")), 0); }}>Check for updates</button>
           <button className="analysis-progress" title={s?.analysis.running ? s.analysis.current : (s?.analysis.message || "Analyze duration and estimate BPM for your library")} onClick={() => invoke("analyze_library", {force:false, cancel:s?.analysis.running || false}).catch(e=>setError(String(e)))}>{s?.analysis.running ? `Analyzing ${s.analysis.completed}/${s.analysis.total} · Pause` : "Analyze library"}</button>
-          <label className="skin-picker">
-            Skin
-            <select value={skin} onChange={event => setSkin(event.currentTarget.value as SettingsSkin)}>
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-              <option value="xbox">Xbox</option>
-              <option value="matrix">Matrix</option>
-            </select>
-          </label>
+        </div>
+        <div className="header-right">
+          <button className="update-header-button" title="Check for application updates" onClick={async () => { setUpdateStatus("Checking for updates…"); try { const update = await check(); setUpdateStatus(update ? `Version ${update.version} is available. Open Settings → General to install.` : "SkyDek DJ is up to date."); } catch (e) { setUpdateStatus(`Update check failed: ${String(e)}`); } }}>Check for updates</button>
           <button aria-label="Toggle fullscreen" title="Fullscreen (F11)" onClick={() => invoke("toggle_fullscreen").catch(e => setError(String(e)))}>⛶</button>
           <button onClick={() => cmd("shift")}>
             {s?.shift ? "SHIFT" : "NORMAL"}
@@ -556,7 +636,11 @@ function App() {
           </button>
         </div>
       </header>
-      <div className="stacked">
+      {autoMenu && <div className="context-menu" style={{left:autoMenu.x,top:autoMenu.y}} onMouseLeave={()=>setAutoMenu(null)}>
+        <button onClick={()=>{void cmd("auto_dj_source",undefined,1);setAutoMenu(null);}}>Use Sidelist / Queue</button>
+        <button onClick={()=>{void cmd("auto_dj_source",undefined,0);setAutoMenu(null);}}>Use selected library folder</button>
+      </div>}
+      <div className="stacked" onDragOver={e => e.preventDefault()} onDrop={e => dropTrack(e, e.clientY < e.currentTarget.getBoundingClientRect().top + e.currentTarget.clientHeight / 2 ? 0 : 1)}>
         <div>
           <Wave skin={skin} track={trackFor(0)} deck={s?.audio.decks[0]} span={waveSpan} onSpan={setWaveSpan} onSeek={(v, dragged) => seekWave(0, v, dragged)} />
         </div>
@@ -588,6 +672,11 @@ function App() {
             SAMPLER LEVEL
             <input type="range" min="0" max="1" step="0.01" value={s?.preferences.sampler_volume ?? 0.8} onChange={(e) => cmd("sampler_volume", undefined, +e.target.value)} />
           </label>
+          <div className="mic-controls">
+            <label>MIC<input aria-label="Microphone level" type="range" min="0" max="1" step="0.01" value={s?.preferences.mic_volume ?? 0.8} onChange={(e) => cmd("mic_volume", undefined, +e.target.value)} /></label>
+            <button className={(s?.preferences.mic_mute ?? false) ? "active" : ""} onClick={()=>cmd("mic_mute",undefined,s?.preferences.mic_mute?0:1)}>MUTE</button>
+            <button className={(s?.preferences.mic_ducking ?? false) ? "active" : ""} onClick={()=>cmd("mic_ducking",undefined,s?.preferences.mic_ducking?0:1)}>DUCK</button>
+          </div>
           <MasterVisualizer peak={s?.audio.peak ?? 0} />
           <small>
             {(s?.audio.peak || 0) > 1 ? "CLIPPING" : "MASTER OUTPUT"}
@@ -605,22 +694,22 @@ function App() {
                 </button>
               ))}
             </div>
-            <button onClick={() => cmd("auto_target")}>AUTO TARGET</button>
           </div>
-          <label className="record-format">Recording format
-            <select aria-label="Recording format" value={recordFormat} disabled={s?.recording || recordBusy} onChange={e=>setRecordFormat(e.target.value as "wav"|"mp3")}><option value="mp3">MP3 · 320 kbps</option><option value="wav">WAV · lossless</option></select>
-          </label>
           <button
             className={s?.recording ? "active" : ""}
             disabled={recordBusy}
             onClick={async () => {
               setRecordBusy(true);
               try {
-                if (!s?.recording && (s?.audio.peak ?? 0) < 0.005) {
-                  setRecordPending(true);
-                  setError("Waiting for audio input…");
-                } else {
-                  await invoke("record", { start: !s?.recording, format:recordFormat });
+                if (s?.recording) { await invoke("record", { start:false }); setRecordPath(null); }
+                else if (recordPending) { setRecordPending(false); setRecordPath(null); }
+                else {
+                  const path = await invoke<string | null>("choose_record_path", {format:recordFormat});
+                  if (path) {
+                    setRecordPath(path);
+                    if ((s?.audio.peak ?? 0) < 0.005) { setRecordPending(true); }
+                    else await invoke("record", {start:true, format:recordFormat, path});
+                  }
                 }
                 setError("");
               } catch (e) {
@@ -630,9 +719,10 @@ function App() {
           >
             <Radio size={13} /> {recordBusy ? "Please wait…" : recordPending ? "WAITING FOR AUDIO" : s?.recording ? "STOP REC" : `RECORD ${recordFormat.toUpperCase()}`}
           </button>
-          <small>
-            {s?.recording ? time(s.recorded_seconds) : "Post-mixer master"}
-          </small>
+          <label className="record-format">Recording format
+            <select aria-label="Recording format" value={recordFormat} disabled={s?.recording || recordBusy} onChange={e=>setRecordFormat(e.target.value as "wav"|"mp3")}><option value="mp3">MP3 · 320 kbps</option><option value="wav">WAV · lossless</option></select>
+          </label>
+          <small>{s?.recording ? time(s.recorded_seconds) : ""}</small>
           <span className="caption">CROSSFADER</span>
           <input
             aria-label="Crossfader"
@@ -647,13 +737,6 @@ function App() {
             <span>1</span>
             <span>2</span>
           </div>
-          <select
-            aria-label="Crossfader curve"
-            onChange={(e) => cmd("curve", undefined, +e.target.value)}
-          >
-            <option value="0">Equal power</option>
-            <option value="1">Linear</option>
-          </select>
         </section>
         {renderDeck(1)}
       </div>
@@ -663,9 +746,6 @@ function App() {
           <h2>
             <Folder size={15} /> BROWSER
           </h2>
-          <button className="active" onClick={() => setBottom("sampler")}>
-            <Music size={15} /> Local library
-          </button>
           <button disabled={busy} onClick={() => imp(false)}>
             <Plus size={15} /> Import tracks
           </button>
@@ -684,7 +764,7 @@ function App() {
           <details className="guide">
             <summary>Controller quick guide</summary>
             <p>
-              D-pad: browse · sampler uses 4×4 grid
+              D-pad: browse panels · Up on top sample row selects banks
               <br />
               A: load preparation deck
               <br />
@@ -706,16 +786,19 @@ function App() {
               Space: play/pause • Q: cue
             </small>
           </details>
+          <div className={`mix-log-widget ${s?.recording ? "recording" : ""}`}><div><strong><span className="rec-dot" />REC • MIX LOG</strong><button onClick={()=>setReplayOpen(true)}>Mix Editor</button></div><div className="mix-log-lines" aria-live="off" ref={mixLogViewport}>{s?.mix_events.length ? [...s.mix_events].reverse().slice(0,7).map((entry,i)=><p key={`${entry.seconds}-${i}`}><time>{time(entry.seconds)}</time> {entry.label}</p>) : <p>Start recording to capture tracks, effects, samples, and mixer moves.</p>}</div>{s?.mix_log_path && <small title={s.mix_log_path}>Saved beside the recording: {s.mix_log_path.replace(/\\/g,"/").split("/").pop()}</small>}</div>
         </aside>
         <div className="column-splitter folder-splitter" {...panelLayout.separator("left")} />
         <section
-          onPointerDown={() => { if(s?.tab !== "library") void cmd("focus_library"); }}
+          onPointerDown={event => { if (!event.target || (event.target as HTMLElement).closest('tr[draggable="true"]')) return; if(s?.tab !== "library") void cmd("focus_library"); }}
           className={`library panel ${s?.tab === "library" ? "focused-panel" : ""}`}
         >
           <div className="library-location" title={folderFilter}>
-            {folderFilter ? "Library / " + folderFilter.replace(/\\/g, "/").split("/").pop() : "Library / All tracks"}
+            {highlightArtwork?<img className="track-art-preview" src={highlightArtwork} alt=""/>:<span className="track-art-placeholder"><Music size={18}/></span>}
+            <span>{folderFilter ? "Library / " + folderFilter.replace(/\\/g, "/").split("/").pop() : "Library / All tracks"}<small className="track-art-title">{highlightedTrack?.title||"Select a track"}</small></span>
           </div>
           <div className="search">
+            <button className="library-refresh" title="Refresh imported folders" aria-label="Refresh library" disabled={busy} onClick={async()=>{setBusy(true);try{const added=await invoke<number>("refresh_library");setError(`${added} new track${added===1?"":"s"} found.`);}catch(e){setError(String(e));}finally{setBusy(false);}}}><RefreshCw size={15}/></button>
             <Search size={17} />
             <input
               placeholder="Search your library…"
@@ -728,9 +811,9 @@ function App() {
             <table>
               <thead>
                 <tr>
-                  <th>Title</th>
-                  <th>BPM</th>
-                  <th>Time</th>
+                  <th><button className="sort-heading" onClick={() => toggleSort("title")}>Title {sort.key === "title" ? sort.direction === 1 ? "↑" : "↓" : "↕"}</button></th>
+                  <th><button className="sort-heading" onClick={() => toggleSort("bpm")}>BPM {sort.key === "bpm" ? sort.direction === 1 ? "↑" : "↓" : "↕"}</button></th>
+                  <th><button className="sort-heading" onClick={() => toggleSort("duration")}>Time {sort.key === "duration" ? sort.direction === 1 ? "↑" : "↓" : "↕"}</button></th>
                   <th>Load</th>
                   <th>Queue</th>
                 </tr>
@@ -743,10 +826,16 @@ function App() {
                         className={s.selected === i ? "selected" : ""}
                         data-selected-track={s.selected === i}
                         onClick={() => cmd("select", undefined, undefined, i)}
+                        onDoubleClick={() => void smartLoad(t.path)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          const parent = t.path.replace(/[\\/][^\\/]+$/, "");
+                          setFolderFilter(parent);
+                          void cmd("select", undefined, undefined, i);
+                          void cmd("auto_dj_source", undefined, 0);
+                        }}
                         draggable
-                        onDragStart={(e) =>
-                          e.dataTransfer.setData("text/plain", t.path)
-                        }
+                        onDragStart={(e) => { e.dataTransfer.effectAllowed = "copy"; e.dataTransfer.setData("application/x-skydek-track", t.path); e.dataTransfer.setData("text/plain", t.path); }}
                       >
                         <td>
                           <Music size={13} /> {t.title}
@@ -838,7 +927,7 @@ function App() {
           {bottom === "sampler" ? (
             <>
               <div className="sampler-banks" role="tablist" aria-label="Sampler banks">
-                {["A", "B", "C"].map((name, i) => <button key={name} className={samplerBank === i ? "active" : ""} onClick={() => setSamplerBank(i)}>{`BANK ${name}`}</button>)}
+                {["A", "B", "C"].map((name, i) => <button key={name} className={samplerBank === i ? `active ${s?.sampler_bank_focus ? "bank-focused" : ""}` : ""} onClick={() => void cmd("bank_select", undefined, undefined, i)}>{`BANK ${name}`}</button>)}
               </div>
               {<div className="pads">
                 {Array.from({ length: 16 }, (_, i) => { const slot = samplerBank * 16 + i; return (
@@ -908,7 +997,7 @@ function App() {
           ) : (
             <div className="queue">
               {s?.queue.map((p, i) => (
-                <div key={i}>
+                <div key={i} draggable onDragStart={e=>{e.dataTransfer.setData("application/x-skydek-queue",String(i));e.dataTransfer.effectAllowed="move";}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const from=Number(e.dataTransfer.getData("application/x-skydek-queue"));if(Number.isInteger(from))void cmd("queue_move",undefined,i,from);}}>
                   <span>{s.library.find((t) => t.path === p)?.title || p}</span>
                   <button
                     onClick={() => {
@@ -930,11 +1019,12 @@ function App() {
           )}
         </section>
       </div>
+      {loadNotice && <div className="deck-load-notice" role="status" aria-live="polite">{loadNotice}</div>}
       <footer>
         <span className="dot" />
-        {busy
+        {updateStatus || (busy
           ? "Loading audio…"
-          : error || s?.error || (s?.auto_dj && s.auto_dj_status) || s?.last || "Connecting to native engine…"}
+          : error || s?.error || (s?.auto_dj && s.auto_dj_status) || s?.last || "Connecting to native engine…")}
         <span>
           {s?.device || "No audio device"} • {s?.sample_rate || 0} Hz
         </span>
@@ -999,12 +1089,15 @@ function App() {
           mappings={s.mappings}
           skin={skin}
           onSkinChange={setSkin}
+          glow={glow}
+          onGlowChange={value => { setGlow(value); localStorage.setItem("skydek-glow",value); }}
           reducedMotion={reducedMotion}
           onReducedMotionChange={setReducedMotion}
           onClose={() => setSettings(false)}
           midiContent={<MidiPanel />}
         />
       )}
+      {replayOpen && <MixEditor initial={pendingMixSession} onClose={()=>{setReplayOpen(false);setPendingMixSession(null);}}/>}
 
     </main>
   );

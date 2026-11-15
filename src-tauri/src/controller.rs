@@ -223,21 +223,32 @@ pub fn read_xinput() -> ControllerSnapshot {
     let gamepad = gilrs.gamepad(id);
     let mut buttons = HashMap::new();
     for (name, button) in [
-        ("a", Button::South), ("b", Button::East), ("x", Button::West), ("y", Button::North),
-        ("dpad-up", Button::DPadUp), ("dpad-down", Button::DPadDown),
-        ("dpad-left", Button::DPadLeft), ("dpad-right", Button::DPadRight),
-        ("lb", Button::LeftTrigger), ("rb", Button::RightTrigger),
-        ("l3", Button::LeftThumb), ("r3", Button::RightThumb),
-        ("menu", Button::Start), ("view", Button::Select),
+        ("a", Button::South),
+        ("b", Button::East),
+        ("x", Button::West),
+        ("y", Button::North),
+        ("dpad-up", Button::DPadUp),
+        ("dpad-down", Button::DPadDown),
+        ("dpad-left", Button::DPadLeft),
+        ("dpad-right", Button::DPadRight),
+        ("lb", Button::LeftTrigger),
+        ("rb", Button::RightTrigger),
+        ("l3", Button::LeftThumb),
+        ("r3", Button::RightThumb),
+        ("menu", Button::Start),
+        ("view", Button::Select),
     ] {
         buttons.insert(name.to_string(), gamepad.is_pressed(button));
     }
     let axis = |axis: Axis| gamepad.value(axis);
     ControllerSnapshot {
         connected: true,
-        left_stick_x: axis(Axis::LeftStickX), left_stick_y: axis(Axis::LeftStickY),
-        right_stick_x: axis(Axis::RightStickX), right_stick_y: axis(Axis::RightStickY),
-        left_trigger: axis(Axis::LeftZ).max(0.0), right_trigger: axis(Axis::RightZ).max(0.0),
+        left_stick_x: axis(Axis::LeftStickX),
+        left_stick_y: axis(Axis::LeftStickY),
+        right_stick_x: axis(Axis::RightStickX),
+        right_stick_y: axis(Axis::RightStickY),
+        left_trigger: axis(Axis::LeftZ).max(0.0),
+        right_trigger: axis(Axis::RightZ).max(0.0),
         battery_percent: None,
         buttons,
     }

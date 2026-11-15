@@ -5,6 +5,26 @@ use std::sync::Arc;
 pub struct Track {
     pub samples: Vec<[f32; 2]>,
     pub rate: u32,
+    pub level_gain: f32,
+}
+pub fn level_gain(samples: &[[f32; 2]]) -> f32 {
+    if samples.is_empty() {
+        return 1.;
+    }
+    let mut power = 0f64;
+    let mut peak = 0f32;
+    for frame in samples.iter().step_by(32) {
+        for sample in frame {
+            power += (*sample as f64).powi(2);
+            peak = peak.max(sample.abs());
+        }
+    }
+    let count = samples.len().div_ceil(32) * 2;
+    let rms = (power / count as f64).sqrt() as f32;
+    if rms < 0.005 {
+        return 1.;
+    }
+    (0.14 / rms).clamp(0.5, 2.5).min(0.95 / peak.max(0.001))
 }
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TrackInfo {
@@ -22,6 +42,46 @@ pub struct TrackInfo {
     pub cues: [Option<f64>; 8],
     #[serde(default)]
     pub main_cue: f64,
+}
+pub fn embedded_artwork(path: &str) -> Result<Option<String>, String> {
+    use symphonia::core::{
+        formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
+    };
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hint = Hint::new();
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|x| x.to_str())
+    {
+        hint.with_extension(ext);
+    }
+    let mut probe = symphonia::default::get_probe()
+        .format(
+            &hint,
+            MediaSourceStream::new(Box::new(file), Default::default()),
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| e.to_string())?;
+    let mut metadata = probe.format.metadata();
+    let Some(revision) = metadata.skip_to_latest() else {
+        return Ok(None);
+    };
+    let Some(image) = revision.visuals().iter().find(|v| {
+        matches!(
+            v.media_type.as_str(),
+            "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+        ) && !v.data.is_empty()
+            && v.data.len() <= 5 * 1024 * 1024
+    }) else {
+        return Ok(None);
+    };
+    let mime = image.media_type.clone();
+    let bytes = image.data.to_vec();
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+    )))
 }
 pub fn decode(path: &str) -> Result<(Arc<Track>, TrackInfo), String> {
     decode_with_limit(path, 30 * 60, 768 * 1024 * 1024)
@@ -44,11 +104,15 @@ fn decode_with_limit(
             return Err("Tracks over 30 minutes cannot be loaded in this build".into());
         }
         if samples.len() >= max_frames {
-            return Err(format!("Decoded audio exceeds the {} MiB limit for this slot.", bytes / 1024 / 1024));
+            return Err(format!(
+                "Decoded audio exceeds the {} MiB limit for this slot.",
+                bytes / 1024 / 1024
+            ));
         }
         if samples.len() == samples.capacity() {
             let capacity = (samples.len() * 2).clamp(4096, max_frames);
-            samples.try_reserve_exact(capacity - samples.len())
+            samples
+                .try_reserve_exact(capacity - samples.len())
                 .map_err(|_| "Insufficient memory to decode this audio".to_string())?;
         }
         samples.push(frame);
@@ -72,7 +136,15 @@ fn decode_with_limit(
         waveform,
         ..Default::default()
     };
-    Ok((Arc::new(Track { samples, rate }), info))
+    let level_gain = level_gain(&samples);
+    Ok((
+        Arc::new(Track {
+            samples,
+            rate,
+            level_gain,
+        }),
+        info,
+    ))
 }
 
 /// Decode into a streaming visitor. Analysis does not retain full-song PCM.
@@ -239,6 +311,7 @@ pub enum Cmd {
         seconds: f64,
     },
     FxGate(usize, u8, bool),
+    FxToggle(usize, u8),
     StopSample(usize),
     Load(usize, Arc<Track>, [Option<f64>; 8], bool),
     Toggle(usize),
@@ -256,6 +329,11 @@ pub enum Cmd {
     ClearSample(usize),
     Master(f32),
     SamplerVolume(f32),
+    SamplerGain(usize, f32),
+    MicVolume(f32),
+    MicMute(bool),
+    MicDucking(bool),
+    Normalize(bool),
     Hot(usize, usize, bool),
     Fx(usize, u8),
     Wet(usize, f32),
@@ -418,6 +496,13 @@ pub struct Mixer {
     cross: f32,
     master: f32,
     sampler_volume: f32,
+    sampler_gain: [f32; crate::sampler::SAMPLER_SLOTS],
+    mic_queue: Option<Arc<ArrayQueue<[f32; 2]>>>,
+    mic_volume: f32,
+    mic_mute: bool,
+    mic_ducking: bool,
+    mic_duck_gain: f32,
+    normalize: bool,
     linear: bool,
     rate: u32,
     clock: u64,
@@ -447,11 +532,21 @@ impl Mixer {
             cross: 0.,
             master: 0.8,
             sampler_volume: 0.8,
+            sampler_gain: [0.65; crate::sampler::SAMPLER_SLOTS],
+            mic_queue: None,
+            mic_volume: 0.8,
+            mic_mute: false,
+            mic_ducking: false,
+            mic_duck_gain: 1.,
+            normalize: false,
             linear: false,
             rate,
             clock: 0,
             peak: 0.,
         }
+    }
+    pub fn set_mic_queue(&mut self, queue: Arc<ArrayQueue<[f32; 2]>>) {
+        self.mic_queue = Some(queue);
     }
     pub fn apply(&mut self, c: Cmd) {
         match c {
@@ -565,6 +660,15 @@ impl Mixer {
                     }
                 }
             }
+            Cmd::FxToggle(i, effect) => {
+                if let Some(d) = self.decks.get_mut(i) {
+                    d.fx = if d.fx == effect { 0 } else { effect };
+                    d.fx_time = 0.;
+                    if d.fx == 3 {
+                        d.playing = true;
+                    }
+                }
+            }
             Cmd::SwapSamples(a, b) => {
                 if a < crate::sampler::SAMPLER_SLOTS && b < crate::sampler::SAMPLER_SLOTS {
                     self.samplers.swap(a, b);
@@ -587,7 +691,9 @@ impl Mixer {
                     if d.track.is_some() {
                         if phase == 1 {
                             if let Some(position) = d.pending_cue.take() {
-                                if let Some(slot) = d.hot[..3].iter_mut().find(|slot| slot.is_none()) {
+                                if let Some(slot) =
+                                    d.hot[..3].iter_mut().find(|slot| slot.is_none())
+                                {
                                     *slot = Some(position);
                                     d.cue = position;
                                     return;
@@ -643,6 +749,15 @@ impl Mixer {
             }
             Cmd::Master(x) => self.master = x.clamp(0., 1.),
             Cmd::SamplerVolume(x) => self.sampler_volume = x.clamp(0., 1.),
+            Cmd::SamplerGain(i, x) => {
+                if i < crate::sampler::SAMPLER_SLOTS {
+                    self.sampler_gain[i] = x.clamp(0., 2.);
+                }
+            }
+            Cmd::MicVolume(x) => self.mic_volume = x.clamp(0., 1.),
+            Cmd::MicMute(x) => self.mic_mute = x,
+            Cmd::MicDucking(x) => self.mic_ducking = x,
+            Cmd::Normalize(enabled) => self.normalize = enabled,
             Cmd::Linear(x) => self.linear = x,
             Cmd::Sampler(i, t) => {
                 if i < crate::sampler::SAMPLER_SLOTS {
@@ -655,13 +770,23 @@ impl Mixer {
                 self.sample_pos = [None; crate::sampler::SAMPLER_SLOTS];
                 self.sample_layers = [[None; 7]; crate::sampler::SAMPLER_SLOTS];
             }
-            Cmd::LoadWithCue { deck, track, hot, cue, force, result } => {
+            Cmd::LoadWithCue {
+                deck,
+                track,
+                hot,
+                cue,
+                force,
+                result,
+            } => {
                 let accepted = deck < self.decks.len() && (!self.decks[deck].playing || force);
                 if accepted {
                     self.apply(Cmd::Load(deck, track, hot, force));
                     self.apply(Cmd::RestoreCue(deck, cue));
                 }
-                result.store(if accepted { 1 } else { 2 }, std::sync::atomic::Ordering::Release);
+                result.store(
+                    if accepted { 1 } else { 2 },
+                    std::sync::atomic::Ordering::Release,
+                );
             }
             Cmd::Load(i, t, hot, force) => {
                 if i < 2 && (!self.decks[i].playing || force) {
@@ -811,7 +936,8 @@ impl Mixer {
                         let b = t.samples[(j + 1).min(t.samples.len() - 1)];
                         let f = (p - p.floor()) as f32;
                         for c in 0..2 {
-                            s[c] = a[c] + (b[c] - a[c]) * f;
+                            s[c] = (a[c] + (b[c] - a[c]) * f)
+                                * if self.normalize { t.level_gain } else { 1. };
                         }
                         let speed = match d.fx {
                             // Wet controls the initial reverse throw (1x to 6x).
@@ -898,7 +1024,7 @@ impl Mixer {
                 out[c] += s[c] * d.volume * gains[i];
             }
         }
-        for i in 0..16 {
+        for i in 0..crate::sampler::SAMPLER_SLOTS {
             if let Some(t) = &self.samplers[i] {
                 for position in
                     std::iter::once(&mut self.sample_pos[i]).chain(self.sample_layers[i].iter_mut())
@@ -911,7 +1037,8 @@ impl Mixer {
                             for (c, sample) in out.iter_mut().enumerate() {
                                 *sample += (t.samples[j][c]
                                     + (t.samples[next][c] - t.samples[j][c]) * fraction)
-                                    * 0.65 * self.sampler_volume;
+                                    * self.sampler_gain[i]
+                                    * self.sampler_volume;
                             }
                             let advanced = p + t.rate as f64 / self.rate as f64;
                             *position = if advanced < t.samples.len() as f64 {
@@ -926,6 +1053,25 @@ impl Mixer {
                 }
             }
         }
+        let mic = self
+            .mic_queue
+            .as_ref()
+            .and_then(|q| q.pop())
+            .unwrap_or([0., 0.]);
+        let mic_level = mic[0].abs().max(mic[1].abs());
+        let duck_target = if self.mic_ducking && mic_level > 0.025 {
+            0.75
+        } else {
+            1.
+        };
+        self.mic_duck_gain += (duck_target - self.mic_duck_gain) * 0.004;
+        for x in &mut out {
+            *x *= self.mic_duck_gain;
+        }
+        if !self.mic_mute {
+            out[0] += mic[0] * self.mic_volume;
+            out[1] += mic[1] * self.mic_volume;
+        }
         for x in &mut out {
             *x *= self.master;
         }
@@ -938,10 +1084,12 @@ impl Mixer {
     }
     pub fn view(&self) -> View {
         View {
-            sampler_voices: (0..crate::sampler::SAMPLER_SLOTS).map(|i| {
-                u8::from(self.sample_pos[i].is_some())
-                    + self.sample_layers[i].iter().filter(|p| p.is_some()).count() as u8
-            }).collect(),
+            sampler_voices: (0..crate::sampler::SAMPLER_SLOTS)
+                .map(|i| {
+                    u8::from(self.sample_pos[i].is_some())
+                        + self.sample_layers[i].iter().filter(|p| p.is_some()).count() as u8
+                })
+                .collect(),
             decks: std::array::from_fn(|i| {
                 let d = &self.decks[i];
                 DeckView {
@@ -1020,13 +1168,36 @@ pub fn start_on_device(
     let rate = config.sample_rate().0;
     let device_name = name.clone();
     std::thread::spawn(move || {
+        let mic_queue = Arc::new(ArrayQueue::new(8192));
         let mixer = Arc::new(std::sync::Mutex::new(Mixer::new(rate)));
+        mixer.lock().unwrap().set_mic_queue(mic_queue.clone());
+        let input_stream = cpal::default_host()
+            .default_input_device()
+            .and_then(|input| {
+                let input_config = input.default_input_config().ok()?;
+                Some(match input_config.sample_format() {
+                    cpal::SampleFormat::F32 => {
+                        input_stream::<f32>(&input, &input_config, mic_queue.clone()).ok()?
+                    }
+                    cpal::SampleFormat::I16 => {
+                        input_stream::<i16>(&input, &input_config, mic_queue.clone()).ok()?
+                    }
+                    cpal::SampleFormat::U16 => {
+                        input_stream::<u16>(&input, &input_config, mic_queue.clone()).ok()?
+                    }
+                    _ => return None,
+                })
+            });
+        if let Some(stream) = &input_stream {
+            let _ = stream.play();
+        }
         let mut first = Some(device);
         loop {
             let output = first.take().or_else(|| {
-                cpal::default_host().output_devices().ok()?.find(|device| {
-                    device.name().ok().as_deref() == Some(device_name.as_str())
-                })
+                cpal::default_host()
+                    .output_devices()
+                    .ok()?
+                    .find(|device| device.name().ok().as_deref() == Some(device_name.as_str()))
             });
             let Some(output) = output else {
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1034,13 +1205,24 @@ pub fn start_on_device(
             };
             let (failed, failure) = std::sync::mpsc::sync_channel(1);
             let stream = match config.sample_format() {
-                cpal::SampleFormat::F32 => output_stream::<f32>(&output, &config, &mixer, &commands, &views, &recorder, failed),
-                cpal::SampleFormat::I16 => output_stream::<i16>(&output, &config, &mixer, &commands, &views, &recorder, failed),
-                cpal::SampleFormat::U16 => output_stream::<u16>(&output, &config, &mixer, &commands, &views, &recorder, failed),
-                cpal::SampleFormat::I32 => output_stream::<i32>(&output, &config, &mixer, &commands, &views, &recorder, failed),
-                cpal::SampleFormat::F64 => output_stream::<f64>(&output, &config, &mixer, &commands, &views, &recorder, failed),
+                cpal::SampleFormat::F32 => output_stream::<f32>(
+                    &output, &config, &mixer, &commands, &views, &recorder, failed,
+                ),
+                cpal::SampleFormat::I16 => output_stream::<i16>(
+                    &output, &config, &mixer, &commands, &views, &recorder, failed,
+                ),
+                cpal::SampleFormat::U16 => output_stream::<u16>(
+                    &output, &config, &mixer, &commands, &views, &recorder, failed,
+                ),
+                cpal::SampleFormat::I32 => output_stream::<i32>(
+                    &output, &config, &mixer, &commands, &views, &recorder, failed,
+                ),
+                cpal::SampleFormat::F64 => output_stream::<f64>(
+                    &output, &config, &mixer, &commands, &views, &recorder, failed,
+                ),
                 _ => {
-                    *errors.lock().unwrap() = "Unsupported output format. Choose another audio device.".into();
+                    *errors.lock().unwrap() =
+                        "Unsupported output format. Choose another audio device.".into();
                     return;
                 }
             };
@@ -1061,16 +1243,43 @@ pub fn start_on_device(
                 },
                 Err(error) => error.to_string(),
             };
-            *errors.lock().unwrap() = format!("Audio output interrupted: {error}. Reconnecting to {device_name}.");
+            *errors.lock().unwrap() =
+                format!("Audio output interrupted: {error}. Reconnecting to {device_name}.");
             if recorder.is_open() {
                 let _ = recorder.stop().map_err(|error| {
-                    errors.lock().unwrap().push_str(&format!(" Recording finalization failed: {error}"));
+                    errors
+                        .lock()
+                        .unwrap()
+                        .push_str(&format!(" Recording finalization failed: {error}"));
                 });
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
     });
     Ok((name, rate))
+}
+fn input_stream<T: cpal::SizedSample + cpal::Sample>(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    queue: Arc<ArrayQueue<[f32; 2]>>,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    f32: cpal::FromSample<T>,
+{
+    use cpal::traits::DeviceTrait;
+    let channels = config.channels() as usize;
+    device.build_input_stream(
+        &config.config(),
+        move |data: &[T], _| {
+            for frame in data.chunks(channels) {
+                let left = frame.first().map(|x| x.to_sample::<f32>()).unwrap_or(0.);
+                let right = frame.get(1).map(|x| x.to_sample::<f32>()).unwrap_or(left);
+                let _ = queue.push([left, right]);
+            }
+        },
+        move |_| {},
+        None,
+    )
 }
 fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
     device: &cpal::Device,
@@ -1083,8 +1292,12 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
 ) -> Result<cpal::Stream, cpal::BuildStreamError> {
     use cpal::traits::DeviceTrait;
     let channels = config.channels() as usize;
-    let (mixer, commands, views, recorder) =
-        (mixer.clone(), commands.clone(), views.clone(), recorder.clone());
+    let (mixer, commands, views, recorder) = (
+        mixer.clone(),
+        commands.clone(),
+        views.clone(),
+        recorder.clone(),
+    );
     device.build_output_stream(
         &config.config(),
         move |data: &mut [T], _| {
@@ -1093,7 +1306,9 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
                 return;
             };
             for _ in 0..64 {
-                let Some(command) = commands.pop() else { break; };
+                let Some(command) = commands.pop() else {
+                    break;
+                };
                 mixer.apply(command);
             }
             for frame in data.chunks_mut(channels) {
@@ -1109,7 +1324,9 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
             }
             let _ = views.push(mixer.view());
         },
-        move |error| { let _ = failed.try_send(error.to_string()); },
+        move |error| {
+            let _ = failed.try_send(error.to_string());
+        },
         None,
     )
 }
@@ -1148,7 +1365,10 @@ mod tests {
             result: result.clone(),
         });
         assert_eq!(result.load(Ordering::Acquire), 2);
-        assert_eq!(mixer.view().decks[0].track_id, Arc::as_ptr(&original) as usize);
+        assert_eq!(
+            mixer.view().decks[0].track_id,
+            Arc::as_ptr(&original) as usize
+        );
         assert_eq!(mixer.view().decks[0].cue, 0.1);
     }
     #[test]
@@ -1307,6 +1527,25 @@ mod tests {
         assert_eq!(m.view().sampler_voices[0], 0);
     }
     #[test]
+    fn sampler_gain_scales_each_pad_without_changing_the_global_level() {
+        let mut full = Mixer::new(48000);
+        full.apply(Cmd::Sampler(0, tone()));
+        full.apply(Cmd::SamplerGain(0, 1.));
+        full.apply(Cmd::SamplePress(0, crate::sampler::PlayMode::Restart));
+
+        let mut half = Mixer::new(48000);
+        half.apply(Cmd::Sampler(0, tone()));
+        half.apply(Cmd::SamplerGain(0, 0.5));
+        half.apply(Cmd::SamplePress(0, crate::sampler::PlayMode::Restart));
+
+        let full_frame = full.frame();
+        let half_frame = half.frame();
+        for channel in 0..2 {
+            assert!((half_frame[channel] - full_frame[channel] * 0.5).abs() < 1e-6);
+        }
+        assert!((full.sampler_volume - half.sampler_volume).abs() < f32::EPSILON);
+    }
+    #[test]
     fn toggle_starts_stops_and_starts_again() {
         let mut m = Mixer::new(48000);
         m.apply(Cmd::Sampler(0, tone()));
@@ -1331,7 +1570,10 @@ mod tests {
         m.apply(Cmd::SamplePress(0, crate::sampler::PlayMode::Overlap));
         m.apply(Cmd::SamplePress(0, crate::sampler::PlayMode::Overlap));
         m.apply(Cmd::StopSamples);
-        assert_eq!(m.view().sampler_voices, vec![0; crate::sampler::SAMPLER_SLOTS]);
+        assert_eq!(
+            m.view().sampler_voices,
+            vec![0; crate::sampler::SAMPLER_SLOTS]
+        );
     }
     #[test]
     fn restart_and_replacement_clear_previous_overlaps() {
@@ -1444,17 +1686,39 @@ mod tests {
         m.apply(Cmd::SamplePress(0, crate::sampler::PlayMode::Restart));
         assert_eq!(m.sample_pos[0], Some(0.));
     }
+    #[test]
+    fn final_sampler_bank_produces_audio() {
+        let mut mixer = Mixer::new(48000);
+        let last = crate::sampler::SAMPLER_SLOTS - 1;
+        mixer.apply(Cmd::Sampler(last, tone()));
+        mixer.apply(Cmd::SamplePress(last, crate::sampler::PlayMode::Restart));
+        assert!(mixer.frame().iter().any(|sample| *sample > 0.));
+    }
     fn tone() -> Arc<Track> {
         Arc::new(Track {
             samples: vec![[0.5; 2]; 48000],
             rate: 48000,
+            level_gain: 1.,
         })
+    }
+    #[test]
+    fn level_matching_boosts_quiet_tracks_without_exceeding_peak_headroom() {
+        let quiet = level_gain(&vec![[0.04, -0.04]; 4096]);
+        let loud = level_gain(&vec![[0.4, -0.4]; 4096]);
+        assert!(quiet > loud);
+        assert!(0.04 * quiet <= 0.95);
+        assert!(0.4 * loud <= 0.95);
+        assert_eq!(level_gain(&[]), 1.);
     }
     fn effect_mixer(rate: u32, samples: Vec<[f32; 2]>) -> Mixer {
         let mut m = Mixer::new(rate);
         m.apply(Cmd::Load(
             0,
-            Arc::new(Track { samples, rate }),
+            Arc::new(Track {
+                samples,
+                rate,
+                level_gain: 1.,
+            }),
             [None; 8],
             false,
         ));
@@ -1715,6 +1979,7 @@ mod tests {
         let long = Arc::new(Track {
             samples: vec![[0.1; 2]; 48000 * 4],
             rate: 48000,
+            level_gain: 1.,
         });
         m.apply(Cmd::Load(0, long, [None; 8], false));
         m.apply(Cmd::Seek(0, 2.));
@@ -1806,6 +2071,7 @@ mod tests {
             Arc::new(Track {
                 samples: vec![[0.2; 2]; 48000 * 8],
                 rate: 48000,
+                level_gain: 1.,
             }),
             [None; 8],
             false,
@@ -1864,6 +2130,7 @@ mod tests {
             Arc::new(Track {
                 samples: vec![[0.1; 2]; 48000],
                 rate: 48000,
+                level_gain: 1.,
             }),
             [None; 8],
             false,

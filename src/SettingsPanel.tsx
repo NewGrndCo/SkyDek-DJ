@@ -1,16 +1,19 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { GeneralSettings, type GeneralSettingsProps } from "./GeneralSettings";
 import { MapperPanel, type Mappings } from "./MapperPanel";
 import "./settings.css";
 
-export type SettingsSkin = "dark" | "light" | "xbox" | "matrix";
+export type SettingsSkin = "dark" | "light" | "xbox";
 export type SettingsPanelProps = Omit<GeneralSettingsProps, "section"> & {
   mappings: Mappings;
   skin: SettingsSkin;
   onSkinChange: (skin: SettingsSkin) => void;
+  glow: "light" | "medium" | "heavy";
+  onGlowChange: (value: "light" | "medium" | "heavy") => void;
   reducedMotion: boolean;
   onReducedMotionChange: (value: boolean) => void;
   closing?: boolean;
@@ -20,6 +23,7 @@ export type SettingsPanelProps = Omit<GeneralSettingsProps, "section"> & {
 const pages = [
   ["general", "General"],
   ["appearance", "Appearance"],
+  ["autodj", "Auto DJ"],
   ["audio", "Audio"],
   ["controller", "Xbox Controller"],
   ["midi", "MIDI Controllers"],
@@ -38,6 +42,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [message, setMessage] = useState("");
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "current" | "available" | "error">("idle");
   const [latestVersion, setLatestVersion] = useState("");
+  const [currentVersion, setCurrentVersion] = useState("");
   const [releaseUrl, setReleaseUrl] = useState("");
   const [pendingUpdate, setPendingUpdate] = useState<any>(null);
   async function checkForUpdates() {
@@ -56,13 +61,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
       const release = await response.json() as { tag_name?: string; html_url?: string };
       const latest = (release.tag_name || "").replace(/^v/i, "");
       setLatestVersion(latest); setReleaseUrl(release.html_url || "https://github.com/NewGrndCo/SkyDek-DJ/releases");
-      const current = "0.10.1".split(".").map(Number), next = latest.split(".").map(Number);
-      const newer = next.length === 3 && next.some((part, index) => part > (current[index] || 0)) && next.findIndex((part, index) => part !== (current[index] || 0)) >= 0;
+      const installed = await getVersion();
+      setCurrentVersion(installed);
+      const current = installed.split(".").map(Number), next = latest.split(".").map(Number);
+      const firstDifference = next.findIndex((part, index) => part !== (current[index] || 0));
+      const newer = next.length === 3 && firstDifference >= 0 && next[firstDifference] > (current[firstDifference] || 0);
       setUpdateState(newer ? "available" : "current");
     } catch (error) { setUpdateState("error"); setMessage(`Update check failed: ${String(error)}`); }
   }
   useEffect(() => {
-    const handler = () => { setPage("appearance"); setVisited(previous => new Set([...previous, "appearance"])); void checkForUpdates(); };
+    const handler = () => { setPage("general"); setVisited(previous => new Set([...previous, "general"])); void checkForUpdates(); };
     window.addEventListener("skydek-check-updates", handler);
     return () => window.removeEventListener("skydek-check-updates", handler);
   }, []);
@@ -125,32 +133,34 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <button type="button" className="settings-close" onClick={onClose} aria-label="Close settings">×</button>
       </div>
       <div className="settings-shell-body">
-        <div className="settings-sidebar" role="tablist" aria-label="Settings categories" aria-orientation="vertical">
+        <div className="settings-sidebar" role="tablist" aria-label="Settings categories" aria-orientation="horizontal">
           {pages.map(([key, label], index) => <button type="button" key={key} role="tab" id={`${id}-tab-${key}`} aria-controls={`${id}-panel-${key}`} aria-selected={page === key} tabIndex={page === key ? 0 : -1} onClick={() => selectPage(key)} onKeyDown={event => navigate(event, index)}>{label}</button>)}
         </div>
         <div className="settings-content" ref={scroll}>
           {pages.map(([key, label]) => <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`} hidden={page !== key} tabIndex={0}>
             <div className="settings-page-heading"><h3>{label}</h3></div>
-            {visited.has(key) && (key === "general" || key === "audio" || key === "controller") && <GeneralSettings {...props} section={key} />}
             {key === "controller" && visited.has(key) && <MapperPanel initial={props.mappings} profiles={props.preferences.profiles} activeProfile={props.preferences.active_profile} />}
+            {visited.has(key) && (key === "general" || key === "audio" || key === "controller" || key === "autodj") && <GeneralSettings {...props} section={key} />}
             {key === "appearance" && <div className="settings-appearance">
-              <label>Skin<select value={skin} onChange={event => onSkinChange(event.target.value as SettingsSkin)}><option value="dark">Dark</option><option value="light">Light</option><option value="xbox">Xbox</option><option value="matrix">Matrix</option></select></label>
+              <label>Skin<select value={skin} onChange={event => onSkinChange(event.target.value as SettingsSkin)}><option value="dark">Dark</option><option value="light">Light</option><option value="xbox">Xbox</option></select></label>
+              <label>Deck glow<select value={props.glow} onChange={event => props.onGlowChange(event.target.value as typeof props.glow)}><option value="light">Light</option><option value="medium">Medium</option><option value="heavy">Heavy</option></select></label>
               <label className="settings-check"><input type="checkbox" checked={reducedMotion} onChange={event => onReducedMotionChange(event.target.checked)} />Reduce motion</label>
               <p>Limit interface animations and transitions.</p>
               <h4>Workspace</h4><div className="settings-actions"><button type="button" onClick={props.resetLayout}>Reset panel sizes</button><button type="button" onClick={() => { void invoke("toggle_fullscreen").catch(error => setMessage(String(error))); }}>Toggle fullscreen (F11)</button></div>
               <p role="status">{message}</p>
-              <h4>Updates</h4>
+            </div>}
+            {key === "general" && <div className="settings-appearance"><h4>Updates</h4>
               <div className="settings-actions">
                 <button type="button" onClick={() => void checkForUpdates()} disabled={updateState === "checking"}>{updateState === "checking" ? "Checking…" : "Check for updates"}</button>
                 {updateState === "available" && <button type="button" onClick={() => void installUpdate()}>Install v{latestVersion}</button>}
               </div>
-              <p role="status">{updateState === "current" ? `You are up to date (v0.10.1).` : updateState === "available" ? `Version ${latestVersion} is available.` : ""}</p>
+              <p role="status">{updateState === "current" ? `You are up to date (v${currentVersion}).` : updateState === "available" ? `Version ${latestVersion} is available.` : ""}</p>
             </div>}
             {key === "midi" && page === key && midiContent}
           </div>)}
         </div>
       </div>
-      <div className="settings-shell-footer"><span>SkyDek DJ · New Ground Enterprise</span><button type="button" onClick={onClose}>Done</button></div>
+      <div className="settings-shell-footer"><span>SkyDek DJ — New Ground Media</span><button type="button" onClick={onClose}>Done</button></div>
     </section>
   </div>;
 }

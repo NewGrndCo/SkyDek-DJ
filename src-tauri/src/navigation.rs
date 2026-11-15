@@ -14,15 +14,18 @@ pub fn browse(indices: &[usize], selected: usize, step: isize) -> Option<usize> 
     if indices.is_empty() {
         return None;
     }
-    let pos = indices.iter().position(|i| *i == selected).unwrap_or(0);
+    let Some(pos) = indices.iter().position(|i| *i == selected) else {
+        return indices.first().copied();
+    };
     Some(indices[(pos as isize + step).clamp(0, indices.len() as isize - 1) as usize])
 }
 /// Move spatially through the fixed 4x4 sampler, including empty assignment slots.
 pub fn pad_step(selected: usize, dx: isize, dy: isize) -> usize {
-    let selected = selected.min(15);
-    let col = (selected % 4) as isize;
-    let row = (selected / 4) as isize;
-    ((row + dy).clamp(0, 3) * 4 + (col + dx).clamp(0, 3)) as usize
+    let bank = selected.min(crate::sampler::SAMPLER_SLOTS - 1) / 16;
+    let local = selected % 16;
+    let col = (local % 4) as isize;
+    let row = (local / 4) as isize;
+    bank * 16 + ((row + dy).clamp(0, 3) * 4 + (col + dx).clamp(0, 3)) as usize
 }
 pub fn folders(paths: &[String], roots: &[String]) -> Vec<String> {
     let mut bases = roots.to_vec();
@@ -93,6 +96,15 @@ mod tests {
         assert_eq!(pad_step(5, 0, -1), 1);
         assert_eq!(pad_step(15, 1, 1), 15);
         assert_eq!(pad_step(0, -1, -1), 0);
+        assert_eq!(pad_step(19, 1, 0), 19);
+        assert_eq!(pad_step(19, 0, 1), 23);
+        assert_eq!(pad_step(47, 1, 1), 47);
+    }
+    #[test]
+    fn sorted_browse_starts_at_first_visible_track_after_folder_change() {
+        assert_eq!(browse(&[9, 4, 7], 99, 1), Some(9));
+        assert_eq!(browse(&[9, 4, 7], 9, 1), Some(4));
+        assert_eq!(browse(&[9, 4, 7], 4, -1), Some(9));
     }
     #[test]
     fn folder_navigation_includes_ancestors_and_excludes_siblings() {

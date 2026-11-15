@@ -185,6 +185,7 @@ mod tests {
         let track = audio::Track {
             samples: vec![[-0.75, 0.5]; 512],
             rate: 48000,
+            level_gain: 1.,
         };
         let data = waveform(&track);
         assert_eq!(data.len(), 2);

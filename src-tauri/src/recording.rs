@@ -9,19 +9,23 @@ use std::sync::{
 
 const WRITE_FRAMES: usize = 4096;
 
-enum RecordingWriter {
+pub(crate) enum RecordingWriter {
     Wav(hound::WavWriter<BufWriter<File>>),
     Mp3(Mp3Process),
 }
 
-struct Mp3Process {
+pub(crate) struct Mp3Process {
     child: std::process::Child,
     input: Option<BufWriter<std::process::ChildStdin>>,
     stderr: Option<std::thread::JoinHandle<String>>,
 }
 impl Mp3Process {
-    fn create(path: &Path, rate: u32) -> Result<Self, String> {
-        let encoder_name = if cfg!(windows) { "skydek-mp3-encoder.exe" } else { "skydek-mp3-encoder" };
+    pub(crate) fn create(path: &Path, rate: u32) -> Result<Self, String> {
+        let encoder_name = if cfg!(windows) {
+            "skydek-mp3-encoder.exe"
+        } else {
+            "skydek-mp3-encoder"
+        };
         let installed = std::env::current_exe()
             .map_err(|e| e.to_string())?
             .parent()
@@ -136,7 +140,7 @@ impl Drop for Mp3Process {
     }
 }
 impl RecordingWriter {
-    fn create(path: &Path, rate: u32) -> Result<Self, String> {
+    pub(crate) fn create(path: &Path, rate: u32) -> Result<Self, String> {
         if rate == 0 || rate > i32::MAX as u32 {
             return Err("Invalid recording sample rate".into());
         }
@@ -163,7 +167,7 @@ impl RecordingWriter {
             .map_err(|e| e.to_string()),
         }
     }
-    fn write(&mut self, samples: &[f32]) -> Result<(), String> {
+    pub(crate) fn write(&mut self, samples: &[f32]) -> Result<(), String> {
         match self {
             Self::Wav(writer) => {
                 for &sample in samples {
@@ -185,7 +189,7 @@ impl RecordingWriter {
             }
         }
     }
-    fn finalize(self) -> Result<(), String> {
+    pub(crate) fn finalize(self) -> Result<(), String> {
         match self {
             Self::Wav(writer) => writer.finalize().map_err(|e| e.to_string()),
             Self::Mp3(mut process) => process.finish(),

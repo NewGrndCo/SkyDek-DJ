@@ -25,8 +25,9 @@
 .settings-shell .settings-eyebrow { color: var(--settings-muted); letter-spacing: .18em; font-size: 10px; font-weight: 700; }
 .settings-shell h2 { margin: 5px 0 0; padding: 0; border: 0; font-size: 22px; line-height: 1.25; font-weight: 600; }
 .settings-shell .settings-close { width: 36px; height: 36px; padding: 0; font-size: 25px; }
-.settings-shell .settings-shell-body { display: grid; grid-template-columns: 206px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
-.settings-shell .settings-sidebar { display: flex; flex-direction: column; gap: 5px; padding: 20px 12px; border-right: 1px solid var(--settings-line); background: var(--settings-raised); }
+.settings-shell .settings-shell-body { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
+.settings-shell .settings-sidebar { display:flex; flex-direction:row; gap:6px; padding:10px 16px; border-right:0; border-bottom:1px solid var(--settings-line); background:var(--settings-raised); overflow-x:auto; flex:0 0 auto; }
+.settings-shell .settings-sidebar button { white-space:nowrap; }
 .settings-shell .settings-sidebar button { text-align: left; padding: 12px 14px; min-height: 42px; background: transparent; border-color: transparent; font-size: 13px; }
 .settings-backdrop .settings-shell .settings-sidebar button[aria-selected="true"] {
   color: var(--settings-accent);
@@ -83,4 +84,53 @@
 .settings-shell .mapper-editor > small { color: var(--settings-muted); }
 @media (prefers-reduced-motion: reduce) {
   .settings-backdrop *, .settings-backdrop *::before, .settings-backdrop *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* Premium settings shell with horizontal category navigation. */
+.settings-backdrop[data-settings-skin="dark"] {
+  --settings-bg: #12151f; --settings-raised: #202432; --settings-line: #41445b;
+  --settings-accent: #c46dff; --settings-muted: #adb5c8;
+}
+.settings-backdrop .settings-shell {
+  width: min(1220px, 96vw); height: min(820px, 90vh); max-height: 90vh;
+  border: 1px solid color-mix(in srgb, var(--settings-accent) 35%, var(--settings-line));
+  border-radius: 16px;
+  box-shadow: 0 28px 100px #000b, 0 0 38px color-mix(in srgb, var(--settings-accent) 14%, transparent), inset 0 1px #ffffff20;
+}
+.settings-shell .settings-shell-heading {
+  background: linear-gradient(110deg, color-mix(in srgb, var(--settings-accent) 14%, var(--settings-bg)), var(--settings-bg) 64%);
+  padding: 19px 27px;
+}
+.settings-shell .settings-eyebrow { color: var(--settings-accent); letter-spacing: .2em; }
+.settings-shell h2 { font-size: 25px; letter-spacing: -.025em; }
+.settings-shell .settings-shell-body { display: flex; flex-direction: column; }
+.settings-shell .settings-sidebar {
+  display: flex; flex-direction: row; align-items: center; gap: 6px;
+  padding: 10px 18px; border-right: 0; border-bottom: 1px solid var(--settings-line);
+  overflow-x: auto; flex: none; white-space: nowrap;
+  background: color-mix(in srgb, var(--settings-raised) 68%, var(--settings-bg));
+}
+.settings-shell .settings-sidebar button { text-align: center; min-height: 40px; padding: 9px 17px; flex: none; border-radius: 7px; }
+.settings-backdrop .settings-shell .settings-sidebar button[aria-selected="true"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--settings-accent) 38%, var(--settings-raised)), color-mix(in srgb, var(--settings-accent) 15%, var(--settings-bg)));
+  border-color: var(--settings-accent);
+  box-shadow: inset 0 1px #ffffff35, 0 0 12px color-mix(in srgb, var(--settings-accent) 25%, transparent);
+  color: var(--settings-ink);
+}
+.settings-shell .settings-content { flex: 1; padding: 24px clamp(20px, 4vw, 52px); }
+.settings-shell .settings-page-heading { margin-bottom: 24px; }
+.settings-shell .settings-page-heading h3 { font-size: 21px; font-weight: 650; }
+.settings-shell :is(button, select, input:not([type="checkbox"]):not([type="range"])) {
+  border-radius: 7px; border-color: var(--settings-line);
+  box-shadow: inset 0 1px #ffffff1a, 0 2px 5px #0003;
+}
+.settings-shell button:hover:not(:disabled) { background: color-mix(in srgb, var(--settings-accent) 16%, var(--settings-raised)); }
+.settings-shell :is(.general-settings, .settings-appearance) { max-width: 940px; }
+.settings-shell .general-settings h3, .settings-shell .settings-appearance h4 { padding-top: 4px; border-top: 0; }
+.settings-shell .settings-shell-footer { background: color-mix(in srgb, var(--settings-raised) 45%, var(--settings-bg)); }
+.settings-shell .settings-shell-footer button { background: color-mix(in srgb, var(--settings-accent) 28%, var(--settings-raised)); border-color: var(--settings-accent); }
+@media (max-width: 620px) {
+  .settings-shell .settings-shell-body { display: flex; }
+  .settings-shell .settings-sidebar { padding: 9px; }
+  .settings-shell .settings-sidebar button { padding: 8px 11px; }
 }

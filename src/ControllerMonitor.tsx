@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { isEssentialMapping, mappingLabel, type ControllerMappings } from "./mappingLabels";
 
 type Input = {
   connected: boolean; buttons: Record<string, boolean>;
@@ -12,7 +13,13 @@ const hotspots: [string, number, number, number][] = [
   ["dpad-up",38.2,50.6,5], ["dpad-down",38.2,63.5,5],
   ["dpad-left",34,57,5], ["dpad-right",42.4,57,5],
 ];
-export function ControllerMonitor({ onSelect }: { onSelect: (control: string) => void }) {
+type Props = {
+  onSelect: (control: string) => void;
+  mappings: ControllerMappings;
+  layer: "normal" | "shift";
+};
+
+export function ControllerMonitor({ onSelect, mappings, layer }: Props) {
   const [input, setInput] = useState<Input | null>(null);
   useEffect(() => {
     let active = true;
@@ -26,18 +33,23 @@ export function ControllerMonitor({ onSelect }: { onSelect: (control: string) =>
     return () => { active = false; clearTimeout(timer); };
   }, []);
   return <section className="controller-monitor" aria-label="Live Xbox controller input">
-    <strong>LIVE INPUT · {input?.connected ? "Xbox connected" : "Controller disconnected"}</strong>
+    <strong>LIVE INPUT · {input?.connected ? "Xbox connected" : "Controller disconnected"} · {layer.toUpperCase()}</strong>
     <div className="controller-shoulders">{["lt","lb","rb","rt"].map(control => {
       const amount = control === "lt" ? input?.left_trigger : control === "rt" ? input?.right_trigger : input?.buttons[control] ? 1 : 0;
-      return <button key={control} className={amount && amount > .06 ? "lit" : ""} onClick={() => onSelect(control)}>{control.toUpperCase()}{control.endsWith("t") ? ` ${Math.round((amount || 0) * 100)}%` : ""}</button>;
+      const action = mappings[layer][control];
+      return <button key={control} className={`${amount && amount > .06 ? "lit" : ""} ${isEssentialMapping(action) ? "essential" : ""}`} onClick={() => onSelect(control)}><b>{control.toUpperCase()}{control.endsWith("t") ? ` ${Math.round((amount || 0) * 100)}%` : ""}</b><span>{mappingLabel(action)}</span></button>;
     })}</div>
     <div className="xbox-art">
       <img src="/xbox-series-controller-reference.png" alt="White Xbox Series controller with live button highlights" />
-      {hotspots.map(([control,x,y,size]) => <button key={control} title={`Edit ${control}`} aria-label={`Edit ${control}`} className={`xbox-glow ${input?.buttons[control] ? "lit" : ""}`} style={{left:`${x}%`,top:`${y}%`,width:`${size}%`}} onClick={() => onSelect(control)} />)}
+      {hotspots.map(([control,x,y,size]) => {
+        const action = mappings[layer][control];
+        return <div className={`controller-control control-${control}`} key={control} style={{left:`${x}%`,top:`${y}%`}}><button title={`Edit ${control}: ${mappingLabel(action)}`} aria-label={`Edit ${control}: ${mappingLabel(action)}`} className={`xbox-glow ${input?.buttons[control] ? "lit" : ""}`} style={{width:`${size}cqw`}} onClick={() => onSelect(control)} /><span className={isEssentialMapping(action) ? "essential" : ""}><b>{control.toUpperCase()}</b> {mappingLabel(action)}</span></div>;
+      })}
       {(["left","right"] as const).map((side, i) => {
         const x = input?.[`${side}_stick_x`] || 0, y = input?.[`${side}_stick_y`] || 0;
         const control = i === 0 ? "l3" : "r3";
-        return <button key={side} title={`Edit ${control}`} aria-label={`Edit ${control}`} className={`xbox-glow stick ${Math.abs(x) + Math.abs(y) > .12 || input?.buttons[control] ? "lit" : ""}`} style={{left:`${(i === 0 ? 27.5 : 61.7) + x * 1.8}%`,top:`${(i === 0 ? 35.2 : 56.2) - y * 2.7}%`,width:"11%"}} onClick={() => onSelect(control)} />;
+        const action = mappings[layer][control];
+        return <div className={`controller-control control-${control}`} key={side} style={{left:`${(i === 0 ? 27.5 : 61.7) + x * 1.8}%`,top:`${(i === 0 ? 35.2 : 56.2) - y * 2.7}%`}}><button title={`Edit ${control}: ${mappingLabel(action)}`} aria-label={`Edit ${control}: ${mappingLabel(action)}`} className={`xbox-glow stick ${Math.abs(x) + Math.abs(y) > .12 || input?.buttons[control] ? "lit" : ""}`} onClick={() => onSelect(control)} /><span className={isEssentialMapping(action) ? "essential" : ""}><b>{control.toUpperCase()}</b> {mappingLabel(action)}</span></div>;
       })}
     </div>
     <small>Click a controller button to edit its assignment. Share is reserved by Windows.</small>

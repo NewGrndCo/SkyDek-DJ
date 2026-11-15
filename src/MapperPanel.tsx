@@ -79,7 +79,7 @@ export function MapperPanel({ initial, profiles, activeProfile }: { initial: Map
   return (
     <section className="mapper-editor">
       <h3>SkyDek Mapper</h3>
-      <ControllerMonitor onSelect={control => {
+      <ControllerMonitor mappings={draft} layer={layer} onSelect={control => {
         const select = document.getElementById("map-" + control);
         select?.scrollIntoView({ block: "nearest" });
         select?.focus();
@@ -89,6 +89,8 @@ export function MapperPanel({ initial, profiles, activeProfile }: { initial: Map
         <input aria-label="New profile name" placeholder="New profile name" value={profileName} onChange={e => setProfileName(e.target.value)} maxLength={80}/>
         <button disabled={saving || !profileName.trim()} onClick={() => runProfile("save", profileName.trim())}>Save as new profile</button>
         <button disabled={saving || Object.keys(profiles).length < 2} onClick={() => { if(window.confirm("Delete profile " + activeProfile + "?")) void runProfile("delete", activeProfile); }}>Delete profile</button>
+        <button disabled={saving} onClick={async()=>{try{const path=await invoke<string|null>("export_mapping_profile");if(path)setMessage(`Exported ${activeProfile} to ${path}`);}catch(e){setMessage(String(e));}}}>Export JSON</button>
+        <button disabled={saving} onClick={async()=>{setSaving(true);try{const name=await invoke<string|null>("import_mapping_profile");if(name)setMessage(`Imported and activated ${name}.`);}catch(e){setMessage(String(e));}finally{setSaving(false);}}}>Import JSON</button>
       </div>
       <p>
         These assignments control SkyDek DJ directly. Changes take effect after

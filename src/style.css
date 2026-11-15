@@ -17,11 +17,23 @@ select:focus, input:focus, button:focus-visible { outline: 2px solid #bc79ff; ou
 .profile-tools label, .general-settings label { display:flex; gap:8px; align-items:center; margin:10px 0; }
 .general-settings select { max-width:100%; min-width:0; }
 .settings-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
-.xbox-art { position:relative; width:min(100%, 510px); margin:0 auto; aspect-ratio:3/2; }
+.xbox-art { position:relative; width:min(100%, 510px); margin:0 auto; aspect-ratio:3/2; container-type:inline-size; }
 .xbox-art img { width:100%; height:100%; object-fit:contain; display:block; user-select:none; pointer-events:none; }
-main section.controller-monitor .xbox-art > button.xbox-glow { position:absolute; aspect-ratio:1; height:auto; min-height:0; padding:0; min-width:0; border-radius:50%; border:2px solid transparent; transform:translate(-50%,-50%); background:transparent; box-shadow:none; }
-main section.controller-monitor .xbox-art > button.xbox-glow:is(:hover, :focus-visible) { border-color:#d6b8ff; }
-main section.controller-monitor .xbox-art > button.xbox-glow.lit { border-color:#eaffbd; background:#b8ff5a30; box-shadow:0 0 14px 5px #b5ff5f, inset 0 0 8px #b5ff5f; }
+main section.controller-monitor .controller-control { position:absolute; transform:translate(-50%,-50%); z-index:2; }
+main section.controller-monitor .controller-control > button.xbox-glow { position:absolute; left:0; top:0; aspect-ratio:1; height:auto; min-height:0; padding:0; min-width:0; border-radius:50%; border:2px solid transparent; transform:translate(-50%,-50%); background:transparent; box-shadow:none; }
+main section.controller-monitor .controller-control > button.xbox-glow:is(:hover, :focus-visible) { border-color:#d6b8ff; }
+main section.controller-monitor .controller-control > button.xbox-glow.lit { border-color:#eaffbd; background:#b8ff5a30; box-shadow:0 0 14px 5px #b5ff5f, inset 0 0 8px #b5ff5f; }
+main section.controller-monitor .controller-control > button.stick { width:11cqw; }
+main section.controller-monitor .controller-control > span { position:absolute; left:12px; top:-13px; width:max-content; max-width:130px; padding:3px 6px; border:1px solid #465064; border-radius:5px; background:#0c1018e8; color:#d7deeb; font-size:10px; line-height:1.2; pointer-events:none; box-shadow:0 3px 10px #0008; }
+main section.controller-monitor .controller-control > span b { color:#b98cff; }
+main section.controller-monitor .controller-control > span.essential { border-color:#aef35d; color:#f4ffe8; box-shadow:0 0 10px #8fe24a45; }
+main section.controller-monitor .controller-control > span.essential b { color:#baff70; }
+main section.controller-monitor .control-a > span, main section.controller-monitor .control-b > span, main section.controller-monitor .control-y > span, main section.controller-monitor .control-menu > span, main section.controller-monitor .control-r3 > span { left:auto; right:12px; }
+main section.controller-monitor .control-y > span, main section.controller-monitor .control-dpad-up > span { top:-34px; }
+main section.controller-monitor .control-a > span, main section.controller-monitor .control-dpad-down > span { top:16px; }
+main section.controller-monitor .control-x > span, main section.controller-monitor .control-dpad-left > span { left:auto; right:12px; }
+main section.controller-monitor .control-b > span, main section.controller-monitor .control-dpad-right > span { left:12px; right:auto; }
+main section.controller-monitor .control-view > span, main section.controller-monitor .control-menu > span { top:16px; }
 .controller-shoulders { display:flex; justify-content:space-between; gap:8px; margin-top:10px; }
 .controller-shoulders .lit { color:#eaffbd; border-color:#d6ff9b; box-shadow:0 0 13px #b5ff5f; }
 .sampler-tools, .sampler-edit { padding:8px; }
@@ -583,6 +595,13 @@ tr:hover {
   border-color: #ad64ff;
 }
 .controller-monitor { padding: 14px; margin: 12px 0; border: 1px solid #70469b; border-radius: 8px; background: #10121b; }
+.controller-shoulders button { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.controller-shoulders button span { color:#aeb7c7; font-size:10px; font-weight:500; }
+.controller-shoulders button.essential span { color:#c9ff8d; }
+.deck.just-loaded { animation:deck-load-confirm 1.6s ease-out; }
+@keyframes deck-load-confirm { 0%,30% { border-color:#baff70; box-shadow:0 0 0 2px #baff70, 0 0 28px #9cff5266; } 100% { box-shadow:none; } }
+.deck-load-notice { position:fixed; left:50%; bottom:28px; z-index:80; transform:translateX(-50%); padding:9px 16px; border:1px solid #9ee758; border-radius:8px; background:#0d1219ee; color:#dfffc0; font-weight:700; box-shadow:0 10px 30px #000a,0 0 18px #8fdc4850; pointer-events:none; }
+@media (prefers-reduced-motion: reduce) { .deck.just-loaded { animation:none; border-color:#baff70; } }
 .live-buttons { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
 .live-buttons span { padding:5px 8px; border:1px solid #444; border-radius:6px; font-size:11px; }
 .live-buttons .lit { background:#8426d4; box-shadow:0 0 12px #b35fff; color:white; }
@@ -827,8 +846,9 @@ footer > span:last-child {
   overflow-y: auto;
 }
 .folder-tree {
-  max-height: 300px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
+  flex: 0 0 auto;
   padding: 8px 4px;
   border-top: 1px solid #44314e;
 }

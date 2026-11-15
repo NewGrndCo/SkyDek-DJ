@@ -20,6 +20,21 @@ select, select option, select optgroup { background-color: #1b1e26; color: #e2e6
 input[type="range"] { accent-color: var(--accent); height: 18px; }
 input[type="number"] { background: #11141a; border-color: var(--line); border-radius: 5px; }
 header { height: 60px; padding: 0 20px; gap: 14px; background: #101218; border-color: var(--line); }
+.header-left-actions button,.header-right button,.header-left-actions select { min-height: 32px; height:32px; padding: 0 10px; font-size: 12px; }
+.context-menu { position: fixed; z-index: 100; min-width: 190px; padding: 6px; display: grid; gap: 4px; background:#171923; border:1px solid #8b5cf6; border-radius:8px; box-shadow:0 12px 30px #0009; }
+.context-menu button { text-align:left; background:transparent; border:0; color:#f4f1ff; padding:8px 10px; border-radius:5px; cursor:pointer; }
+.context-menu button:hover { background:#6d28d9; }
+.mic-controls { display:flex; align-items:center; gap:5px; width:100%; }
+.mic-controls label { flex:1; min-width:0; }
+.mic-controls button { flex:0 0 auto; padding:5px 7px; font-size:10px; }
+.folders { display:flex; flex-direction:column; }
+.folders .guide { order: 1; }
+.folders .mix-log-widget { order: 2; flex:0 0 auto; }
+.mix-log-widget.recording { color:#ff6675; border-color:#8f2e3b; }
+.mix-log-widget.recording strong,.mix-log-widget.recording time { color:#ff4d61; }
+.rec-dot { display:inline-block; width:7px; height:7px; margin-right:5px; border-radius:50%; background:#7d8797; vertical-align:middle; }
+.mix-log-widget.recording .rec-dot { background:#ff334d; animation:rec-pulse 1.8s ease-in-out infinite; }
+@keyframes rec-pulse { 0%,100% { opacity:.35; box-shadow:0 0 0 0 #ff334d55; } 50% { opacity:1; box-shadow:0 0 0 4px #ff334d22; } }
 header h1 { font-size: 25px; letter-spacing: -.9px; }
 header h1 em { color: #b38bee; }
 .brand-mark { width: 56px; }
@@ -87,7 +102,7 @@ main > .browser { padding: 0 14px 12px; gap: 12px; grid-template-columns: 200px 
 .folders > button { background: transparent; border-bottom: 0; padding: 9px 12px; color: #aab3c4; font-size: 11px; }
 .folders > button.active { background: #252131; color: #ddc9fa; box-shadow: inset 2px 0 #a482d6; }
 .folders > button:hover { background: #202630; }
-.folder-tree { border-color: #2b303b; padding: 8px; max-height: none; }
+.folder-tree { border-color: #2b303b; padding: 8px; max-height: none; overflow:visible; flex:0 0 auto; }
 .folder-tree > button { font-size: 10px; padding: 6px; background: transparent; border-color: #303743; }
 .folder-tree summary { font-size: 11px; padding: 7px 4px; color: #b4bdce; }
 .folder-tree summary:hover, .folder-tree .selected-folder { background: #282535; color: #e3d3f9; border-radius: 4px; }
@@ -96,6 +111,10 @@ main > .browser { padding: 0 14px 12px; gap: 12px; grid-template-columns: 200px 
 .guide summary { font-size: 10px; font-weight: 500; cursor: pointer; color: #9ea8bb; }
 .guide p { font-size: 11px; }
 .library-location { background: transparent; color: #9eacc0; padding: 12px 14px 4px; font-size: 10px; }
+.library-location{display:flex;align-items:center;gap:10px;min-height:52px}
+.track-art-preview,.track-art-placeholder{width:42px;height:42px;border-radius:6px;object-fit:cover;flex:none;background:#202433;border:1px solid #414258}
+.track-art-placeholder{display:grid;place-items:center;color:#a965e6}
+.track-art-title{display:block;color:var(--text,#eef0f8);font-size:12px;font-weight:600;margin-top:3px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .search { padding: 8px 12px 12px; border-color: #2b303a; gap: 8px; }
 .search svg { color: #8b97aa; }
 .search input { padding: 9px 10px; background: #101319; border-color: #303745; border-radius: 6px; font-size: 12px; }
