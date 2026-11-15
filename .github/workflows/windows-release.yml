@@ -24,6 +24,8 @@ jobs:
         run: npm run test:ui
       - name: Build frontend
         run: npm run build
+      - name: Prepare bundled MP3 encoder
+        run: npm run build:encoder
       - name: Test Rust backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build, sign, and publish Windows updater

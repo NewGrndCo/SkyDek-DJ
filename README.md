@@ -8,7 +8,7 @@ SkyDek DJ is a standalone desktop DJ workstation by New Ground Media. It support
 
 ## Current Windows release
 
-Version **0.10.18** adds safe double-click deck loading, live function labels on the virtual Xbox controller, and the latest beta-tested Mix Editor improvements. Existing signed Windows installations can use **Check for updates** to download and verify the new release.
+Version **0.10.19** adds safe double-click deck loading, live function labels on the virtual Xbox controller, and the latest beta-tested Mix Editor improvements. Existing signed Windows installations can use **Check for updates** to download and verify the new release.
 
 ## Development and verification
 

@@ -1,4 +1,4 @@
-# SkyDek DJ 0.10.18
+# SkyDek DJ 0.10.19
 
 This signed Windows update contains the latest beta-tested SkyDek DJ workspace and Mix Editor improvements.
 
