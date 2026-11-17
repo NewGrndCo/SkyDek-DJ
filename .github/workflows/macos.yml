@@ -57,7 +57,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
-          args: --bundles dmg --target universal-apple-darwin
+          args: --bundles app,dmg --target universal-apple-darwin
       - name: Verify bundled Mac resources and architecture
         run: bash scripts/verify-macos-dmg.sh src-tauri/target/universal-apple-darwin/release/bundle/dmg
       - name: Retain Mac package for build inspection
