@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { importLegacy, parseSession, reconstructed, timelineSeconds, visibleTimelineItems } from '../src/mixEditorModel.ts';
+import { importLegacy, parseSession, reconstructed, replaceDeckClip, timelineSeconds, visibleTimelineItems } from '../src/mixEditorModel.ts';
 const deck=(path)=>({path,position:0,playing:true,rate:1,volume:.8,filter:0,effect:0,wet:0,peak:0,cue:0});
 const log={version:1,audio_file:'mix.wav',frames:[{seconds:0,decks:[deck('a.wav'),deck('b.wav')],crossfader:0,master:.8,sampler_volume:.8,samples:[]},{seconds:10,decks:[deck('a.wav'),deck('b.wav')],crossfader:.5,master:.8,sampler_volume:.8,samples:[]}],events:[]};
 test('legacy import and versioned session round trip',()=>{const session=importLegacy(JSON.stringify(log),'Test');assert.equal(parseSession(JSON.stringify(session)).name,'Test');assert.equal(reconstructed(session,10).decks[1].path,'b.wav');});
@@ -50,4 +50,38 @@ test('dense timelines render a bounded visible sample and retain selection',()=>
   assert.ok(visible.length<=201);
   assert.ok(visible.every(item=>item.seconds>=100&&item.seconds<=200));
   assert.equal(visible.some(item=>item.id==='point-1555'),true);
+});
+
+test('clip replacement changes one contiguous occurrence and preserves other uses',()=>{
+  const local=structuredClone(log);
+  local.frames=[
+    {...local.frames[0],seconds:0,decks:[deck('a.wav'),deck('b.wav')]},
+    {...local.frames[0],seconds:5,decks:[deck('other.wav'),deck('b.wav')]},
+    {...local.frames[0],seconds:10,decks:[deck('a.wav'),deck('b.wav')]},
+    {...local.frames[0],seconds:15,decks:[deck('a.wav'),deck('b.wav')]},
+  ];
+  const original=importLegacy(JSON.stringify(local),'Clips');
+  const changed=replaceDeckClip(original,0,0,5,'a.wav','replacement.wav');
+  assert.equal(changed.source.log.frames[0].decks[0].path,'replacement.wav');
+  assert.equal(changed.source.log.frames[2].decks[0].path,'a.wav');
+  assert.equal(original.source.log.frames[0].decks[0].path,'a.wav');
+  assert.equal(parseSession(JSON.stringify(changed)).source.log.frames[0].decks[0].path,'replacement.wav');
+  assert.throws(()=>replaceDeckClip(changed,0,0,5,'a.wav','other.wav'),/no longer available/);
+});
+test('precise sample and effect commands survive import between snapshots',()=>{
+  const local=structuredClone(log);
+  local.sample_commands=[
+    {seconds:1,path:'horn.wav',action:'press',mode:'restart'},
+    {seconds:1.04,path:'horn.wav',action:'press',mode:'restart'},
+    {seconds:1.08,path:'horn.wav',action:'release',mode:'hold'},
+  ];
+  local.effect_commands=[{seconds:1.02,deck:0,effect:4,active:true},{seconds:1.07,deck:0,effect:4,active:false}];
+  const session=importLegacy(JSON.stringify(local),'Commands');
+  assert.equal(session.triggers.length,3);
+  assert.equal(session.triggers[1].seconds,1.04);
+  assert.equal(session.triggers[2].action,'release');
+  assert.equal(session.edits.length,2);
+  assert.equal(reconstructed(session,1.03).decks[0].effect,4);
+  assert.equal(reconstructed(session,1.08).decks[0].effect,0);
+  assert.deepEqual(parseSession(JSON.stringify(session)).triggers,session.triggers);
 });

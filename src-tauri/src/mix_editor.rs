@@ -34,6 +34,10 @@ pub struct Trigger {
     pub kind: String,
     pub source: String,
     pub gain: f32,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub mode: Option<crate::sampler::PlayMode>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -56,7 +60,7 @@ pub struct Session {
     #[serde(default)]
     pub edits: Vec<Edit>,
     #[serde(default)]
-    pub triggers: Vec<Trigger>,
+    pub triggers: Option<Vec<Trigger>>,
     #[serde(default)]
     pub relinks: HashMap<String, String>,
     #[serde(flatten)]
@@ -159,8 +163,12 @@ fn validate(session: &Session) -> Result<(), String> {
         return Err("Session name is invalid".into());
     }
     if session.source.log.version != 1
+        || session.source.log.capture_revision > 1
         || session.source.log.frames.is_empty()
         || session.source.log.frames.len() > 144_000
+        || session.source.log.sample_commands.len() > 500_000
+        || session.source.log.effect_commands.len() > 500_000
+        || session.source.log.mic_commands.len() > 500_000
     {
         return Err("Session contains an invalid legacy performance log".into());
     }
@@ -198,6 +206,12 @@ fn validate(session: &Session) -> Result<(), String> {
         {
             return Err("A recorded mixer state is invalid".into());
         }
+        if frame.mic.as_ref().is_some_and(|mic| !mic.volume.is_finite() || !(0. ..=1.).contains(&mic.volume)) {
+            return Err("A recorded microphone state is invalid".into());
+        }
+    }
+    if session.source.log.mic_commands.iter().any(|command| !command.seconds.is_finite() || command.seconds < 0. || command.seconds > duration + 0.2 || !command.state.volume.is_finite() || !(0. ..=1.).contains(&command.state.volume)) {
+        return Err("A recorded microphone command is invalid".into());
     }
     let mut identifiers = HashSet::new();
     for edit in &session.edits {
@@ -224,6 +238,7 @@ fn validate(session: &Session) -> Result<(), String> {
             || !(0.0..=duration).contains(&trigger.seconds)
             || !trigger.gain.is_finite()
             || !(0.0..=2.0).contains(&trigger.gain)
+            || trigger.action.as_deref().is_some_and(|action| !matches!(action, "press" | "release"))
         {
             return Err("Session contains an invalid sample trigger".into());
         }
@@ -253,7 +268,7 @@ fn validate(session: &Session) -> Result<(), String> {
                 .get("role")
                 .and_then(|value| value.as_str())
                 .ok_or("A media reference has no role")?;
-            if original.is_empty() || !matches!(role, "deck" | "sample" | "recording") {
+            if original.is_empty() || !matches!(role, "deck" | "sample" | "recording" | "mic") {
                 return Err("A media reference is invalid".into());
             }
             if let Some(relative) = reference
@@ -440,20 +455,32 @@ fn media_paths(session: &Session) -> BTreeSet<String> {
                 paths.insert(path.clone());
             }
         }
-        paths.extend(frame.samples.iter().cloned());
     }
     paths.extend(trigger_events(session).into_iter().map(|t| t.source));
+    if let Some(mic_file) = session.source.log.mic_file.as_ref().filter(|path| !path.is_empty()) {
+        paths.insert(mic_file.clone());
+    }
     paths
 }
 
 fn trigger_events(session: &Session) -> Vec<Trigger> {
-    if !session.triggers.is_empty() {
-        let mut out = session.triggers.clone();
+    if let Some(triggers) = &session.triggers {
+        let mut out = triggers.clone();
         out.sort_by(|a, b| {
             a.seconds
                 .total_cmp(&b.seconds)
                 .then_with(|| a.id.cmp(&b.id))
         });
+        return out;
+    }
+    if !session.source.log.sample_commands.is_empty() {
+        let duration = session.source.log.frames.last().map_or(0., |frame| frame.seconds);
+        let mut out: Vec<_> = session.source.log.sample_commands.iter().enumerate().map(|(index, command)| Trigger {
+            id: format!("sample-command-{index}"), seconds: command.seconds.min(duration),
+            kind: "sample".into(), source: command.path.clone(), gain: 0.65,
+            action: Some(command.action.clone()), mode: Some(command.mode),
+        }).collect();
+        out.sort_by(|a, b| a.seconds.total_cmp(&b.seconds).then_with(|| a.id.cmp(&b.id)));
         return out;
     }
     let mut out = Vec::new();
@@ -467,6 +494,8 @@ fn trigger_events(session: &Session) -> Vec<Trigger> {
                 kind: "sample".into(),
                 source: source.clone(),
                 gain: 0.65,
+                action: None,
+                mode: None,
             });
         }
         active = next;
@@ -479,13 +508,16 @@ pub async fn mix_editor_open() -> Result<Option<OpenedSession>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Open SkyDek Mix Editor session")
-            .add_filter("SkyDek Mix Session", &["dek"])
+            .add_filter("SkyDek Mix Session or Recovery Backup", &["dek", "backup"])
             .pick_file()
         else {
             return Ok(None);
         };
-        let text =
-            std::fs::read_to_string(&path).map_err(|e| format!("Could not read session: {e}"))?;
+        let path = if path.extension().and_then(|ext| ext.to_str()) == Some("backup") {
+            restore_backup(&path)?
+        } else { path };
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("Could not read session: {e}"))?;
+        parse(&text)?;
         Ok(Some(OpenedSession {
             path: path.to_string_lossy().into_owned(),
             text,
@@ -493,6 +525,15 @@ pub async fn mix_editor_open() -> Result<Option<OpenedSession>, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn restore_backup(backup: &Path) -> Result<PathBuf, String> {
+    let original = backup.with_extension("");
+    if original.exists() { return Err("The original session still exists. Choose its .dek file instead of the recovery backup.".into()); }
+    let text = std::fs::read_to_string(backup).map_err(|e| format!("Could not read recovery backup: {e}"))?;
+    parse(&text)?;
+    std::fs::copy(backup, &original).map_err(|e| format!("Could not restore recovery backup: {e}"))?;
+    Ok(original)
 }
 
 #[tauri::command]
@@ -529,18 +570,23 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         path.file_name().unwrap_or_default().to_string_lossy(),
         std::process::id()
     ));
-    std::fs::write(&temp, bytes).map_err(|e| format!("Could not write temporary session: {e}"))?;
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temp).map_err(|e| format!("Could not create temporary session: {e}"))?;
+        file.write_all(bytes).map_err(|e| format!("Could not write temporary session: {e}"))?;
+        file.sync_all().map_err(|e| format!("Could not sync temporary session: {e}"))?;
+    }
     let backup = path.with_extension("dek.backup");
     if path.exists() {
         std::fs::copy(path, &backup)
             .map_err(|e| format!("Could not preserve previous session: {e}"))?;
+        std::fs::OpenOptions::new().write(true).open(&backup).and_then(|file| file.sync_all())
+            .map_err(|e| format!("Could not sync recovery backup: {e}"))?;
         std::fs::remove_file(path)
             .map_err(|e| format!("Could not replace previous session: {e}"))?;
     }
     if let Err(e) = std::fs::rename(&temp, path) {
-        if backup.exists() {
-            let _ = std::fs::copy(&backup, path);
-        }
+        if backup.exists() { let _ = std::fs::copy(&backup, path); }
         let _ = std::fs::remove_file(&temp);
         return Err(format!("Could not finalize session: {e}"));
     }
@@ -570,6 +616,11 @@ fn atomic_replace_render(temp: &Path, output: &Path) -> Result<(), String> {
     }
     let _ = std::fs::remove_file(backup);
     Ok(())
+}
+
+struct RemoveOnDrop(PathBuf);
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
 }
 
 #[tauri::command]
@@ -617,21 +668,15 @@ pub async fn mix_editor_sources(
 ) -> Result<Vec<Resolution>, String> {
     let session = parse(&text)?;
     let session_path = session_path.map(PathBuf::from);
+    let sample_sources: HashSet<String> = trigger_events(&session).into_iter().map(|event| event.source).collect();
     let mut resolutions: Vec<Resolution> = media_paths(&session)
         .into_iter()
         .map(|original| {
             let resolved = resolve_media(&session, &original, session_path.as_deref())
                 .map(|p| p.to_string_lossy().into_owned());
-            let kind = if session
-                .source
-                .log
-                .frames
-                .iter()
-                .any(|f| f.samples.contains(&original))
-                || trigger_events(&session)
-                    .iter()
-                    .any(|event| event.source == original)
-            {
+            let kind = if session.source.log.mic_file.as_deref() == Some(original.as_str()) {
+                "mic"
+            } else if sample_sources.contains(&original) {
                 "sample"
             } else {
                 "deck"
@@ -678,7 +723,7 @@ fn apply_state(
     mixer: &mut Mixer,
     session: &Session,
     frame_index: usize,
-    time: f64,
+    active_edits: &HashMap<&str, f64>,
     tracks: &HashMap<String, Arc<Track>>,
     loaded: &mut [Option<String>; 2],
     effects: &mut [u8; 2],
@@ -692,33 +737,25 @@ fn apply_state(
     let mut filter = [frame.decks[0].filter as f64, frame.decks[1].filter as f64];
     let mut wet = [frame.decks[0].wet as f64, frame.decks[1].wet as f64];
     let mut desired_effect = [frame.decks[0].effect, frame.decks[1].effect];
-    let mut edits: Vec<&Edit> = session.edits.iter().filter(|e| e.seconds <= time).collect();
-    edits.sort_by(|a, b| {
-        a.seconds
-            .total_cmp(&b.seconds)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    for e in edits {
-        match e.lane.as_str() {
-            "crossfader" => cross = e.value,
-            "master" => master = e.value,
-            "sampler_volume" => sampler_volume = e.value,
-            "volume_0" => volume[0] = e.value,
-            "volume_1" => volume[1] = e.value,
-            "rate_0" => rate[0] = e.value,
-            "rate_1" => rate[1] = e.value,
-            "filter_0" => filter[0] = e.value,
-            "filter_1" => filter[1] = e.value,
-            "wet_0" => wet[0] = e.value,
-            "wet_1" => wet[1] = e.value,
-            "effect_0" => desired_effect[0] = e.value.round() as u8,
-            "effect_1" => desired_effect[1] = e.value.round() as u8,
-            _ => {}
+    if let Some(&value) = active_edits.get("crossfader") { cross = value; }
+    if let Some(&value) = active_edits.get("master") { master = value; }
+    if let Some(&value) = active_edits.get("sampler_volume") { sampler_volume = value; }
+    for i in 0..2 {
+        for (name, target) in [("volume", &mut volume[i]), ("rate", &mut rate[i]), ("filter", &mut filter[i]), ("wet", &mut wet[i])] {
+            if let Some(&value) = active_edits.get(format!("{name}_{i}").as_str()) { *target = value; }
         }
+        if let Some(&value) = active_edits.get(format!("effect_{i}").as_str()) { desired_effect[i] = value.round() as u8; }
     }
     mixer.apply(Cmd::Cross(cross as f32));
     mixer.apply(Cmd::Master(master as f32));
     mixer.apply(Cmd::SamplerVolume(sampler_volume as f32));
+    if session.source.log.mic_file.is_some() {
+        if let Some(mic) = &frame.mic {
+            mixer.apply(Cmd::MicVolume(mic.volume));
+            mixer.apply(Cmd::MicMute(mic.mute));
+            mixer.apply(Cmd::MicDucking(mic.ducking));
+        }
+    }
     for i in 0..2 {
         let deck = &frame.decks[i];
         let path_changed = loaded[i] != deck.path;
@@ -727,6 +764,8 @@ fn apply_state(
                 if let Some(track) = tracks.get(path) {
                     mixer.apply(Cmd::Load(i, track.clone(), [None; 8], true));
                 }
+            } else {
+                mixer.apply(Cmd::Unload(i));
             }
             loaded[i] = deck.path.clone();
             effects[i] = 0;
@@ -756,20 +795,70 @@ fn apply_state(
     }
 }
 
+/// Streams the synchronized raw microphone stem; only two source frames stay in memory.
+struct MicStemReader {
+    reader: hound::WavReader<std::io::BufReader<std::fs::File>>,
+    rate: u32,
+    index: u64,
+    current: [f32; 2],
+    next: [f32; 2],
+}
+impl MicStemReader {
+    fn read_frame(reader: &mut hound::WavReader<std::io::BufReader<std::fs::File>>) -> Result<[f32; 2], String> {
+        let mut samples = reader.samples::<f32>();
+        let left = samples.next().transpose().map_err(|error| format!("Microphone stem read failed: {error}"))?.unwrap_or(0.);
+        let right = samples.next().transpose().map_err(|error| format!("Microphone stem read failed: {error}"))?.unwrap_or(0.);
+        Ok([left, right])
+    }
+    fn open(path: &Path, at: f64, end: f64) -> Result<Self, String> {
+        let mut reader = hound::WavReader::open(path)
+            .map_err(|error| format!("Could not open microphone stem {}: {error}", path.display()))?;
+        let spec = reader.spec();
+        if spec.channels != 2 || spec.bits_per_sample != 32 || spec.sample_format != hound::SampleFormat::Float {
+            return Err("Microphone stem must be stereo 32-bit float WAV".into());
+        }
+        if (reader.duration() as f64 + 1.) / (spec.sample_rate as f64) < end {
+            return Err("Microphone stem is shorter than the performance log. Relink the complete stem.".into());
+        }
+        let index = (at * spec.sample_rate as f64).floor() as u64;
+        reader.seek(index.min(u32::MAX as u64) as u32)
+            .map_err(|error| format!("Could not seek microphone stem: {error}"))?;
+        let current = Self::read_frame(&mut reader)?;
+        let next = Self::read_frame(&mut reader)?;
+        Ok(Self { reader, rate: spec.sample_rate, index, current, next })
+    }
+    fn at(&mut self, seconds: f64) -> Result<[f32; 2], String> {
+        let position = seconds * self.rate as f64;
+        let floor = position.floor() as u64;
+        while self.index < floor {
+            self.current = self.next;
+            self.next = Self::read_frame(&mut self.reader)?;
+            self.index += 1;
+        }
+        let mix = (position - self.index as f64) as f32;
+        Ok([self.current[0] + (self.next[0] - self.current[0]) * mix,
+         self.current[1] + (self.next[1] - self.current[1]) * mix])
+    }
+}
+
 fn render(
     session: Session,
     session_path: Option<PathBuf>,
     output: PathBuf,
     progress: Option<&RenderStatus>,
+    region: Option<(f64, f64)>,
 ) -> Result<(), String> {
     validate(&session)?;
-    let mut tracks = HashMap::new();
+    let triggers = trigger_events(&session);
+    let unique_samples: BTreeSet<_> = triggers.iter().map(|event| &event.source).collect();
+    if unique_samples.len() > crate::sampler::SAMPLER_SLOTS {
+        return Err(format!("This mix uses {} distinct sample files; this renderer supports at most {}. Remove or consolidate samples before export.", unique_samples.len(), crate::sampler::SAMPLER_SLOTS));
+    }
+    let mut resolved = HashMap::new();
     for original in media_paths(&session) {
-        let resolved = resolve_media(&session, &original, session_path.as_deref())
+        let path = resolve_media(&session, &original, session_path.as_deref())
             .ok_or_else(|| format!("Missing source: {original}"))?;
-        let (track, _) = audio::decode(&resolved.to_string_lossy())
-            .map_err(|e| format!("Could not decode {}: {e}", resolved.display()))?;
-        tracks.insert(original, track);
+        resolved.insert(original, path);
     }
     let duration = session.source.log.frames.last().unwrap().seconds;
     let parent = output
@@ -787,33 +876,52 @@ fn render(
         ".{}.part.{ext}",
         output.file_stem().unwrap_or_default().to_string_lossy()
     ));
-    let mut writer = RecordingWriter::create(&temp, RENDER_RATE)?;
     let mut mixer = Mixer::new(RENDER_RATE);
     mixer.apply(Cmd::Normalize(true));
     let mut sample_slots = HashMap::new();
-    let triggers = trigger_events(&session);
-    for original in triggers
-        .iter()
-        .map(|event| &event.source)
-        .collect::<BTreeSet<_>>()
-    {
-        if sample_slots.len() >= crate::sampler::SAMPLER_SLOTS {
-            break;
-        }
+    let mut sample_bytes = 0usize;
+    for original in unique_samples {
         let slot = sample_slots.len();
-        if let Some(track) = tracks.get(original) {
-            mixer.apply(Cmd::Sampler(slot, track.clone()));
-            sample_slots.insert(original.clone(), slot);
+        let path = resolved.get(original).ok_or("Sample source is missing")?;
+        let (track, _) = audio::decode_sample(&path.to_string_lossy())
+            .map_err(|e| format!("Could not decode sample {}: {e}", path.display()))?;
+        sample_bytes = sample_bytes.saturating_add(track.samples.len() * std::mem::size_of::<[f32; 2]>());
+        if sample_bytes > 256 * 1024 * 1024 {
+            return Err("Samples in this mix exceed the 256 MiB render memory budget. Remove or shorten some samples.".into());
         }
+        mixer.apply(Cmd::Sampler(slot, track));
+        sample_slots.insert(original.clone(), slot);
     }
+    let mut tracks = HashMap::new();
+    let _partial_cleanup = RemoveOnDrop(temp.clone());
+    let mut writer = RecordingWriter::create(&temp, RENDER_RATE)?;
     let mut frame_index = 0usize;
+    let mut ordered_edits: Vec<&Edit> = session.edits.iter().collect();
+    ordered_edits.sort_by(|a, b| a.seconds.total_cmp(&b.seconds).then_with(|| a.id.cmp(&b.id)));
+    let mut active_edits: HashMap<&str, f64> = HashMap::new();
+    let mut edit_index = 0usize;
+    let mut mic_commands: Vec<_> = session.source.log.mic_commands.iter().collect();
+    mic_commands.sort_by(|a, b| a.seconds.total_cmp(&b.seconds));
+    let mut mic_index = 0usize;
+    let mut active_mic = None;
     let mut loaded = [None, None];
     let mut effects = [0, 0];
     let mut applied_frame = usize::MAX;
-    let mut applied_edits = usize::MAX;
-    let mut trigger_index = 0usize;
+    let (start, end) = region.unwrap_or((0., duration));
+    if !start.is_finite() || !end.is_finite() || start < 0. || end > duration || end < start { return Err("Invalid preview range".into()); }
+    let output_start = (start * RENDER_RATE as f64).round() as u64;
+    let warm_start = if region.is_some() { (start - 5.).max(0.) } else { 0. };
+    let warm_frame = (warm_start * RENDER_RATE as f64).round() as u64;
+    let end_frame = (end * RENDER_RATE as f64).ceil() as u64;
+    let mic_queue = session.source.log.mic_file.as_ref().map(|_| Arc::new(crossbeam_queue::ArrayQueue::new(16)));
+    let mut mic_reader = if let Some(path) = &session.source.log.mic_file {
+        let resolved = resolved.get(path).ok_or("Microphone stem is missing")?;
+        Some(MicStemReader::open(resolved, warm_frame as f64 / RENDER_RATE as f64, end)?)
+    } else { None };
+    if let Some(queue) = &mic_queue { mixer.set_mic_queue(queue.clone()); }
+    let mut trigger_index = triggers.partition_point(|event| event.seconds < warm_start);
     let mut buffer = Vec::with_capacity(8192);
-    let frames = (duration * RENDER_RATE as f64).ceil() as u64;
+    let frames = end_frame.saturating_sub(warm_frame);
     if let Some(progress) = progress {
         progress.total.store(frames, Ordering::Relaxed);
         progress.done.store(0, Ordering::Relaxed);
@@ -829,37 +937,87 @@ fn render(
                 }
             }
         }
-        let time = n as f64 / RENDER_RATE as f64;
+        let absolute_frame = warm_frame + n;
+        let time = absolute_frame as f64 / RENDER_RATE as f64;
         while frame_index + 1 < session.source.log.frames.len()
             && session.source.log.frames[frame_index + 1].seconds <= time
         {
             frame_index += 1;
         }
-        let edit_count = session.edits.iter().filter(|e| e.seconds <= time).count();
-        if applied_frame != frame_index || applied_edits != edit_count {
+        let before_edits = edit_index;
+        while edit_index < ordered_edits.len() && ordered_edits[edit_index].seconds <= time {
+            let edit = ordered_edits[edit_index];
+            active_edits.insert(edit.lane.as_str(), edit.value);
+            edit_index += 1;
+        }
+        let before_mic = mic_index;
+        while mic_index < mic_commands.len() && mic_commands[mic_index].seconds <= time {
+            active_mic = Some(&mic_commands[mic_index].state);
+            mic_index += 1;
+        }
+        if applied_frame != frame_index || before_edits != edit_index || before_mic != mic_index {
+            let wanted: HashSet<_> = session.source.log.frames[frame_index].decks.iter()
+                .filter_map(|deck| deck.path.as_ref()).collect();
+            // Release the previous deck buffer before decoding a replacement.
+            for (i, loaded_path) in loaded.iter_mut().enumerate() {
+                if loaded_path.as_ref() != session.source.log.frames[frame_index].decks[i].path.as_ref() {
+                    mixer.apply(Cmd::Unload(i));
+                    *loaded_path = None;
+                }
+            }
+            tracks.retain(|path, _| wanted.contains(path));
+            for path in &wanted {
+                if !tracks.contains_key(*path) {
+                    let source = resolved.get(*path).ok_or("Deck source is missing")?;
+                    let (track, _) = audio::decode(&source.to_string_lossy())
+                        .map_err(|e| format!("Could not decode {}: {e}", source.display()))?;
+                    tracks.insert((*path).clone(), track);
+                }
+            }
             apply_state(
                 &mut mixer,
                 &session,
                 frame_index,
-                time,
+                &active_edits,
                 &tracks,
                 &mut loaded,
                 &mut effects,
             );
+            if let Some(mic) = active_mic {
+                mixer.apply(Cmd::MicVolume(mic.volume));
+                mixer.apply(Cmd::MicMute(mic.mute));
+                mixer.apply(Cmd::MicDucking(mic.ducking));
+            }
+            if n == 0 && warm_frame > 0 {
+                let observed_frame = &session.source.log.frames[frame_index];
+                let elapsed = (time - observed_frame.seconds).max(0.);
+                for i in 0..2 {
+                    if observed_frame.decks[i].playing && observed_frame.decks[i].path.is_some() {
+                        mixer.apply(Cmd::Seek(i, observed_frame.decks[i].position + elapsed * observed_frame.decks[i].rate));
+                    }
+                }
+            }
             applied_frame = frame_index;
-            applied_edits = edit_count;
         }
         while trigger_index < triggers.len()
             && triggers[trigger_index].seconds <= time + 0.5 / RENDER_RATE as f64
         {
             if let Some(slot) = sample_slots.get(&triggers[trigger_index].source) {
-                mixer.apply(Cmd::SamplerGain(*slot, triggers[trigger_index].gain));
-                mixer.apply(Cmd::SamplePress(*slot, crate::sampler::PlayMode::Restart));
+                let event = &triggers[trigger_index];
+                if event.action.as_deref() == Some("release") {
+                    mixer.apply(Cmd::StopSample(*slot));
+                } else {
+                    mixer.apply(Cmd::SamplerGain(*slot, event.gain));
+                    mixer.apply(Cmd::SamplePress(*slot, event.mode.unwrap_or(crate::sampler::PlayMode::Restart)));
+                }
             }
             trigger_index += 1;
         }
+        if let (Some(reader), Some(queue)) = (&mut mic_reader, &mic_queue) {
+            let _ = queue.push(reader.at(time)?);
+        }
         let sample = mixer.frame();
-        buffer.extend_from_slice(&sample);
+        if absolute_frame >= output_start { buffer.extend_from_slice(&sample); }
         if buffer.len() >= 8192 {
             writer.write(&buffer)?;
             buffer.clear();
@@ -914,6 +1072,7 @@ pub async fn mix_editor_render(
             session_path.map(PathBuf::from),
             output,
             Some(&progress),
+            None,
         )
     })
     .await
@@ -923,16 +1082,25 @@ pub async fn mix_editor_render(
     Ok(Some(result.to_string_lossy().into_owned()))
 }
 
+#[derive(Serialize)]
+pub struct PreviewResult { pub path: String, pub start: f64, pub end: f64 }
+
 #[tauri::command]
 pub async fn mix_editor_preview(
     status: tauri::State<'_, Arc<RenderStatus>>,
     text: String,
     session_path: Option<String>,
-) -> Result<String, String> {
+    position: f64,
+) -> Result<PreviewResult, String> {
     let session = parse(&text)?;
+    if !position.is_finite() { return Err("Invalid preview position".into()); }
+    let duration = session.source.log.frames.last().unwrap().seconds;
+    let start = ((position.min(duration) - 2.).max(0.) * RENDER_RATE as f64).round() / RENDER_RATE as f64;
+    let end = (start + 30.).min(duration);
+    static PREVIEW_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let output = std::env::temp_dir().join(format!(
-        "skydek-mix-editor-preview-{}.wav",
-        std::process::id()
+        "skydek-mix-editor-preview-{}-{}.wav",
+        std::process::id(), PREVIEW_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = output.clone();
     if status.running.swap(true, Ordering::SeqCst) {
@@ -948,13 +1116,30 @@ pub async fn mix_editor_preview(
             session_path.map(PathBuf::from),
             output,
             Some(&progress),
+            Some((start, end)),
         )
     })
     .await
     .map_err(|e| e.to_string());
     status.running.store(false, Ordering::SeqCst);
     completed??;
-    Ok(result.to_string_lossy().into_owned())
+    Ok(PreviewResult { path: result.to_string_lossy().into_owned(), start, end })
+}
+
+#[tauri::command]
+pub fn mix_editor_discard_preview(path: String) -> Result<(), String> {
+    let target = PathBuf::from(path);
+    if target.parent() != Some(std::env::temp_dir().as_path()) ||
+        !target.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("skydek-mix-editor-preview-") && name.ends_with(".wav")) {
+        return Err("Invalid preview file".into());
+    }
+    std::thread::spawn(move || {
+        for _ in 0..20 {
+            if !target.exists() || std::fs::remove_file(&target).is_ok() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -972,6 +1157,7 @@ mod tests {
                 audio_file: "mix.wav".into(),
                 log: MixLog {
                     version: 1,
+                    capture_revision: 0,
                     audio_file: "mix.wav".into(),
                     frames: vec![crate::mixlog::Frame {
                         seconds: 0.,
@@ -991,13 +1177,18 @@ mod tests {
                         master: 0.8,
                         sampler_volume: 0.8,
                         samples: vec![],
+                        mic: None,
                     }],
                     events: vec![],
+                    sample_commands: vec![],
+                    effect_commands: vec![],
+                    mic_file: None,
+                    mic_commands: vec![],
                 },
                 extra: HashMap::new(),
             },
             edits: vec![],
-            triggers: vec![],
+            triggers: Some(vec![]),
             relinks: HashMap::new(),
             extra: HashMap::new(),
         }
@@ -1104,6 +1295,63 @@ mod tests {
         let text = serde_json::to_string(&s).unwrap();
         assert_eq!(parse(&text).unwrap().format, FORMAT);
     }
+    #[test]
+    fn explicit_empty_triggers_remove_last_sample_and_unused_media() {
+        let mut s = session();
+        s.source.log.frames[0].samples = vec!["C:\\missing\\old-sample.wav".into()];
+        s.triggers = None;
+        assert_eq!(trigger_events(&s).len(), 1);
+        s.triggers = Some(vec![]);
+        assert!(trigger_events(&s).is_empty());
+        assert!(media_paths(&s).is_empty());
+        assert!(validate(&s).is_ok());
+    }
+    #[test]
+    fn new_log_uses_precise_sample_commands_between_snapshots() {
+        let mut s = session();
+        s.triggers = None;
+        s.source.log.frames[0].seconds = 1.;
+        s.source.log.sample_commands = vec![
+            crate::mixlog::SampleCommand { seconds: 0.2, path: "horn.wav".into(), action: "press".into(), mode: crate::sampler::PlayMode::Restart },
+            crate::mixlog::SampleCommand { seconds: 0.24, path: "horn.wav".into(), action: "press".into(), mode: crate::sampler::PlayMode::Restart },
+        ];
+        let triggers = trigger_events(&s);
+        assert_eq!(triggers.len(), 2);
+        assert_eq!(triggers[1].seconds, 0.24);
+        assert!(validate(&s).is_ok());
+    }
+    #[test]
+    fn sample_limit_is_explicit_before_render_writes_output() {
+        let mut s = session();
+        s.triggers = Some((0..49).map(|index| Trigger {
+            id: format!("sample-{index}"), seconds: 0., kind: "sample".into(),
+            source: format!("C:\\samples\\{index}.wav"), gain: 0.65,
+            action: None, mode: None,
+        }).collect());
+        let output = std::env::temp_dir().join(format!("skydek-sample-limit-{}.wav", std::process::id()));
+        let error = render(s, None, output.clone(), None, None).unwrap_err();
+        assert!(error.contains("at most 48"));
+        assert!(!output.exists());
+    }
+    #[test]
+    fn atomic_session_save_recovers_valid_previous_revision() {
+        let root = std::env::temp_dir().join(format!("skydek-editor-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("mix.dek");
+        let previous = serde_json::to_vec(&session()).unwrap();
+        std::fs::write(&path, &previous).unwrap();
+        let mut next = session(); next.name = "Next".into();
+        atomic_write(&path, &serde_json::to_vec(&next).unwrap()).unwrap();
+        assert_eq!(parse(&std::fs::read_to_string(&path).unwrap()).unwrap().name, "Next");
+        assert!(!path.with_extension("dek.backup").exists());
+        let backup = path.with_extension("dek.backup");
+        std::fs::copy(&path, &backup).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(restore_backup(&backup).unwrap(), path);
+        assert_eq!(parse(&std::fs::read_to_string(&path).unwrap()).unwrap().name, "Next");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn renders_audible_wav_from_original_deck_media() {
@@ -1152,6 +1400,7 @@ mod tests {
                 master: 0.8,
                 sampler_volume: 0.8,
                 samples: vec![],
+                    mic: None,
             },
             crate::mixlog::Frame {
                 seconds: 0.25,
@@ -1163,16 +1412,89 @@ mod tests {
                 master: 0.8,
                 sampler_volume: 0.8,
                 samples: vec![],
+                    mic: None,
             },
         ];
         let output = root.join("render.wav");
-        render(s, None, output.clone(), None).unwrap();
+        render(s, None, output.clone(), None, None).unwrap();
         let mut reader = hound::WavReader::open(output).unwrap();
         assert_eq!(reader.spec().sample_rate, 48_000);
         assert!(reader
             .samples::<f32>()
             .take(20_000)
             .any(|x| x.unwrap().abs() > 0.01));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn deck_unload_creates_silence_and_region_matches_full_render() {
+        let root = std::env::temp_dir().join(format!("skydek-editor-unload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("tone.wav");
+        let mut writer = hound::WavWriter::create(&source, hound::WavSpec {
+            channels: 2, sample_rate: RENDER_RATE, bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        }).unwrap();
+        for _ in 0..RENDER_RATE { writer.write_sample(0.5f32).unwrap(); writer.write_sample(0.5f32).unwrap(); }
+        writer.finalize().unwrap();
+        let mut s = session();
+        let mut first = s.source.log.frames[0].clone();
+        first.decks[0].path = Some(source.to_string_lossy().into_owned());
+        first.decks[0].playing = true;
+        first.crossfader = -1.;
+        let mut second = first.clone(); second.seconds = 0.25;
+        second.decks[0].position = 0.25;
+        let mut third = second.clone(); third.seconds = 0.5;
+        third.decks[0].path = None; third.decks[0].playing = false;
+        let mut fourth = third.clone(); fourth.seconds = 0.75;
+        s.source.log.frames = vec![first, second, third, fourth];
+        let full = root.join("full.wav");
+        let region = root.join("region.wav");
+        render(s.clone(), None, full.clone(), None, None).unwrap();
+        render(s.clone(), None, region.clone(), None, Some((0.25, 0.75))).unwrap();
+        let full_pcm: Vec<f32> = hound::WavReader::open(full).unwrap().samples::<f32>().map(Result::unwrap).collect();
+        let region_pcm: Vec<f32> = hound::WavReader::open(&region).unwrap().samples::<f32>().map(Result::unwrap).collect();
+        let offset = (0.25 * RENDER_RATE as f64) as usize * 2;
+        assert_eq!(region_pcm.len(), (0.5 * RENDER_RATE as f64) as usize * 2);
+        assert!(full_pcm[0..(0.25 * RENDER_RATE as f64) as usize * 2].iter().any(|x| *x > 0.1));
+        assert!(full_pcm[(0.55 * RENDER_RATE as f64) as usize * 2..].iter().all(|x| x.abs() < 0.001));
+        for (a, b) in region_pcm.iter().zip(&full_pcm[offset..]) { assert!((a - b).abs() < 0.0001); }
+        // A cancelled rebuild must leave the last good export intact and clean its partial file.
+        let previous = std::fs::read(&region).unwrap();
+        let progress = RenderStatus::default();
+        progress.cancel.store(true, Ordering::Relaxed);
+        let cancelled = render(s, None, region.clone(), Some(&progress), Some((0.25, 0.75)));
+        assert!(cancelled.unwrap_err().contains("cancelled"));
+        assert_eq!(std::fs::read(&region).unwrap(), previous);
+        assert!(!root.join(".region.part.wav").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn microphone_stem_resamples_and_contributes_to_render() {
+        let root = std::env::temp_dir().join(format!("skydek-editor-mic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let stem = root.join("mic.wav");
+        let mut writer = hound::WavWriter::create(&stem, hound::WavSpec {
+            channels: 2, sample_rate: 44_100, bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        }).unwrap();
+        for _ in 0..44_100 { writer.write_sample(0.2f32).unwrap(); writer.write_sample(-0.2f32).unwrap(); }
+        writer.finalize().unwrap();
+        let mut reader = MicStemReader::open(&stem, 0.1, 0.25).unwrap();
+        assert!((reader.at(0.1).unwrap()[0] - 0.2).abs() < 0.001);
+        assert!((reader.at(0.2).unwrap()[1] + 0.2).abs() < 0.001);
+        let mut s = session();
+        s.source.log.mic_file = Some(stem.to_string_lossy().into_owned());
+        s.source.log.frames[0].mic = Some(crate::mixlog::MicState { volume: 1., mute: false, ducking: false });
+        s.source.log.frames[0].master = 1.;
+        let mut last = s.source.log.frames[0].clone(); last.seconds = 0.25;
+        s.source.log.frames.push(last);
+        let output = root.join("mix.wav");
+        render(s, None, output.clone(), None, None).unwrap();
+        let samples: Vec<f32> = hound::WavReader::open(output).unwrap().samples::<f32>().map(Result::unwrap).take(1000).collect();
+        assert!(samples.iter().step_by(2).all(|x| (*x - 0.2).abs() < 0.01));
+        assert!(samples.iter().skip(1).step_by(2).all(|x| (*x + 0.2).abs() < 0.01));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

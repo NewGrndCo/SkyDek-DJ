@@ -59,7 +59,7 @@ const analog: Record<string, string> = {
   volume: "Target deck volume",
   master: "Master volume",
 };
-export function MapperPanel({ initial, profiles, activeProfile }: { initial: Mappings; profiles: Record<string, Mappings>; activeProfile: string }) {
+export function MapperPanel({ initial, profiles, activeProfile, active = true }: { initial: Mappings; profiles: Record<string, Mappings>; activeProfile: string; active?: boolean }) {
   const [draft, setDraft] = useState<Mappings>(() => structuredClone(initial)),
     [layer, setLayer] = useState<"normal" | "shift">("normal"),
     [message, setMessage] = useState(""),
@@ -79,7 +79,7 @@ export function MapperPanel({ initial, profiles, activeProfile }: { initial: Map
   return (
     <section className="mapper-editor">
       <h3>SkyDek Mapper</h3>
-      <ControllerMonitor mappings={draft} layer={layer} onSelect={control => {
+      <ControllerMonitor mappings={draft} layer={layer} active={active} onSelect={control => {
         const select = document.getElementById("map-" + control);
         select?.scrollIntoView({ block: "nearest" });
         select?.focus();

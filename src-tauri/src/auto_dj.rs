@@ -1,6 +1,5 @@
 use super::{audio, AppState, Cmd, Model, Track};
 use std::{
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -28,6 +27,7 @@ struct Source {
     path: String,
     ids: [usize; 2],
     kind: String,
+    folder: String,
 }
 
 struct Prepared {
@@ -112,21 +112,16 @@ fn source(m: &Model, previous: Option<&Source>) -> Option<Source> {
         path: path.clone(),
         ids,
         kind,
+        folder: m.session.library_folder.clone(),
     })
 }
 
-fn folder_candidates<'a>(
-    library: &'a [audio::TrackInfo],
-    path: &str,
-) -> Option<impl Iterator<Item = &'a audio::TrackInfo>> {
-    let parent = Path::new(path).parent()?.to_str()?.to_owned();
-    let index = library.iter().position(|t| t.path == path)?;
-    Some(
-        library[index + 1..]
-            .iter()
-            .chain(library[..index].iter())
-            .filter(move |t| crate::navigation::in_folder(&t.path, &parent)),
-    )
+fn folder_candidates<'a>(library: &'a [audio::TrackInfo], path: &str, folder: &str) -> Vec<&'a audio::TrackInfo> {
+    if folder.is_empty() { return Vec::new(); }
+    let in_folder = |t: &&audio::TrackInfo| crate::navigation::in_folder(&t.path, folder);
+    let candidates: Vec<_> = library.iter().filter(in_folder).collect();
+    let start = candidates.iter().position(|t| t.path == path).map_or(0, |i| (i + 1) % candidates.len());
+    candidates[start..].iter().chain(&candidates[..start]).copied().filter(|t| t.path != path).collect()
 }
 
 fn prepare(s: &AppState, source: &Source) -> Option<Prepared> {
@@ -142,7 +137,7 @@ fn prepare(s: &AppState, source: &Source) -> Option<Prepared> {
                 .filter_map(|(_, path)| m.session.library.iter().find(|track| &track.path == path))
                 .collect()
         } else {
-            folder_candidates(&m.session.library, &source.path)?.collect()
+            folder_candidates(&m.session.library, &source.path, &source.folder)
         };
         tracks
             .into_iter()
@@ -195,7 +190,11 @@ pub(super) fn start(s: Arc<AppState>) {
                             .subsec_nanos() as usize;
                         let slot =
                             available[(seed + m.auto_dj.samples_left as usize) % available.len()];
-                        let _ = s.send(Cmd::SamplePress(slot, crate::sampler::PlayMode::Restart));
+                        if s.send(Cmd::SamplePress(slot, crate::sampler::PlayMode::Restart)).is_ok() {
+                            if let Some(path) = m.samples[slot].clone() {
+                                s.mixlog.lock().unwrap().record_sample(s.recorded_seconds(), path, "press", crate::sampler::PlayMode::Restart);
+                            }
+                        }
                     }
                     m.auto_dj.samples_left -= 1;
                     m.auto_dj.next_sample_at = if m.auto_dj.samples_left > 0 {
@@ -233,7 +232,7 @@ pub(super) fn start(s: Arc<AppState>) {
                 continue;
             }
             let Some(prepared) = &next else {
-                m.auto_dj.status = "No other playable tracks in this folder".into();
+                m.auto_dj.status = if current.kind == "queue" { "No playable tracks in Sidelist / Queue".into() } else if current.folder.is_empty() { "Select a library folder for Auto DJ".into() } else { "No other playable tracks in the selected folder".into() };
                 continue;
             };
             m.auto_dj.status = format!("Next: {}", prepared.title);
@@ -311,10 +310,12 @@ mod tests {
             path: path.into(),
             ..Default::default()
         });
-        let paths: Vec<_> = folder_candidates(&library, &library[1].path)
-            .unwrap()
+        let paths: Vec<_> = folder_candidates(&library, &library[1].path, "C:/Music/Set")
+            .into_iter()
             .map(|track| track.path.as_str())
             .collect();
         assert_eq!(paths, [&library[4].path, &library[0].path]);
+        assert!(folder_candidates(&library, &library[1].path, "").is_empty());
+        assert_eq!(folder_candidates(&library, &library[1].path, "C:/Music/Other").len(), 1);
     }
 }

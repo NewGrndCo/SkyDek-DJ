@@ -2,25 +2,27 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 export type Preferences = {
   sampler_modes: ("restart" | "toggle" | "overlap" | "hold")[];
-  cue_seconds: number; crossfade_seconds: number; audio_device: string | null; sampler_volume: number; mic_volume: number; mic_mute: boolean; mic_ducking: boolean; linear_curve: boolean;
+  cue_seconds: number; crossfade_seconds: number; audio_device: string | null; mic_device: string | null; sampler_volume: number; mic_volume: number; mic_mute: boolean; mic_ducking: boolean; linear_curve: boolean;
   auto_dj_seconds: number; auto_dj_source: string; library_monitor:boolean; library_scan_minutes:number; auto_dj_crossfade_seconds:number; auto_dj_sample_count:number; auto_dj_sample_spacing:number; auto_dj_random_samples: boolean; normalize_tracks: boolean; effect_toggle: boolean;
   profiles: Record<string, import("./MapperPanel").Mappings>; active_profile: string;
 };
 export type GeneralSettingsProps = {
-  preferences: Preferences; sensitivity: number; device: string; rate: number;
+  preferences: Preferences; sensitivity: number; device: string; micStatus: string; rate: number;
   command: (action: string, deck?: number, value?: number) => Promise<void>;
   resetLayout: () => void;
   section?: "general" | "audio" | "controller" | "autodj";
 };
-export function GeneralSettings({ preferences, sensitivity, device, rate, command, resetLayout, section }: GeneralSettingsProps) {
+export function GeneralSettings({ preferences, sensitivity, device, micStatus, rate, command, resetLayout, section }: GeneralSettingsProps) {
   const [devices, setDevices] = useState<string[]>([]), [selected, setSelected] = useState(preferences.audio_device || ""),
+    [micDevices, setMicDevices] = useState<string[]>([]), [selectedMic, setSelectedMic] = useState(preferences.mic_device || ""),
     [message, setMessage] = useState(""), [applying, setApplying] = useState(false);
   async function refresh() {
-    try { setDevices(await invoke<string[]>("audio_devices")); }
+    try { const [outputs, inputs] = await Promise.all([invoke<string[]>("audio_devices"), invoke<string[]>("mic_devices")]); setDevices(outputs); setMicDevices(inputs); }
     catch(e) { setMessage(String(e)); }
   }
   useEffect(() => { if (!section || section === "audio") void refresh(); }, [section]);
   useEffect(() => { setSelected(preferences.audio_device || ""); }, [preferences.audio_device]);
+  useEffect(() => { setSelectedMic(preferences.mic_device || ""); }, [preferences.mic_device]);
   const runCommand: typeof command = async (...args) => {
     try { await command(...args); } catch (error) { setMessage(String(error)); }
   };
@@ -41,10 +43,22 @@ export function GeneralSettings({ preferences, sensitivity, device, rate, comman
     }}>Apply output & restart</button></div>
     <small>Connect your audio interface, refresh, then choose its output. Changing output currently requires an application restart.</small>
     <h3>Microphone</h3>
+    <p role="status">{micStatus || "Microphone status unavailable"}</p>
+    <label>Input device <select aria-label="Microphone input device" value={selectedMic} onChange={e => setSelectedMic(e.target.value)}>
+      <option value="">System default input</option>
+      {preferences.mic_device && !micDevices.includes(preferences.mic_device) && <option value={preferences.mic_device}>{preferences.mic_device} (unavailable)</option>}
+      {micDevices.map(name => <option key={name} value={name}>{name}</option>)}
+    </select></label>
+    <button disabled={applying} onClick={async () => {
+      if (!window.confirm("Apply this microphone and restart SkyDek DJ? Playback will stop. Library and mappings will be saved.")) return;
+      setApplying(true);
+      try { await invoke("select_mic_device", { device: selectedMic || null }); }
+      catch(e) { setMessage(String(e)); setApplying(false); }
+    }}>Apply input &amp; restart</button>
     <label>Microphone level<input aria-label="Microphone level" type="range" min="0" max="1" step="0.01" value={preferences.mic_volume ?? 0.8} onChange={e=>void runCommand("mic_volume",undefined,+e.target.value)} /></label>
     <label className="settings-check"><input type="checkbox" checked={preferences.mic_mute ?? false} onChange={e=>void runCommand("mic_mute",undefined,e.target.checked?1:0)} />Mute microphone</label>
     <label className="settings-check"><input type="checkbox" checked={preferences.mic_ducking ?? false} onChange={e=>void runCommand("mic_ducking",undefined,e.target.checked?1:0)} />Duck music while speaking</label>
-    <p>SkyDek uses the system default microphone. Ducking smoothly reduces deck and sampler audio while voice level is detected.</p>
+    <p>Ducking smoothly reduces deck and sampler audio while voice level is detected.</p>
     <h3>Playback levels</h3>
     <label className="settings-check"><input type="checkbox" checked={preferences.normalize_tracks} onChange={event => void runCommand("normalize_tracks", undefined, event.target.checked ? 1 : 0)} />Match perceived track levels</label>
     <p>Applies a bounded gain estimate to deck tracks when loaded. Volume, crossfader, and master controls remain available. Peak safety limits boosts; strongly compressed tracks may still sound different.</p>

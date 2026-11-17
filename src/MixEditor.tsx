@@ -4,6 +4,7 @@ import {
   duration,
   importLegacy,
   parseSession,
+  replaceDeckClip,
   reconstructed,
   timelineSeconds,
   visibleTimelineItems,
@@ -42,7 +43,7 @@ const lanes: Lane[] = [
 ];
 
 export type OpenedMixSession = { path: string; text: string };
-type Source = { original: string; resolved: string | null; kind: "deck" | "sample" | "recording" };
+type Source = { original: string; resolved: string | null; kind: "deck" | "sample" | "recording" | "mic" };
 type Clip = { deck: number; path: string; start: number; end: number };
 
 function deckSegments(session: MixSession, deck: number): Clip[] {
@@ -54,7 +55,7 @@ function deckSegments(session: MixSession, deck: number): Clip[] {
     if (!path) continue;
     const next = index + 1 < frames.length ? frames[index + 1].seconds : end;
     const previous = clips.at(-1);
-    if (previous?.path === path) previous.end = next;
+    if (index > 0 && frames[index - 1].decks[deck].path === path && previous?.path === path) previous.end = next;
     else clips.push({ deck, path, start: frames[index].seconds, end: next });
   }
   return clips;
@@ -73,21 +74,42 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewRange, setPreviewRange] = useState({ start: 0, end: 0 });
+  const previewFile = useRef<string | null>(null);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [sessionPath, setSessionPath] = useState<string | null>(null);
   const [sourcePath, setSourcePath] = useState<string | null>(null);
-  const [saved, setSaved] = useState(true);
+  const [savedSession, setSavedSession] = useState<MixSession | null>(null);
   const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState<Source[]>([]);
   const [progress, setProgress] = useState({ running: false, done: 0, total: 0 });
   const [autoplayPreview, setAutoplayPreview] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(290);
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
+  const [waveforms, setWaveforms] = useState<Record<string, number[]>>({});
   const audio = useRef<HTMLAudioElement>(null);
   const editorDialog = useRef<HTMLElement>(null);
   const timelineScroll = useRef<HTMLDivElement>(null);
   const openedInitial = useRef("");
+  const busyRef = useRef(false);
+  const renderBusyRef = useRef(false);
+  const previewGeneration = useRef(0);
+  const saved = !session || session === savedSession;
   const total = session ? duration(session) : 0;
   const frame = useMemo(() => (session ? reconstructed(session, position) : null), [session, position]);
-  const clips = useMemo(() => (session ? [deckSegments(session, 0), deckSegments(session, 1)] : [[], []]), [session]);
+  const clips = useMemo(() => (session ? [deckSegments(session, 0), deckSegments(session, 1)] : [[], []]), [session?.source.log]);
+  const editsByLane = useMemo(() => {
+    const grouped = new Map<Edit["lane"], Edit[]>();
+    for (const edit of session?.edits ?? []) {
+      const row = grouped.get(edit.lane) ?? [];
+      row.push(edit);
+      grouped.set(edit.lane, row);
+    }
+    return grouped;
+  }, [session?.edits]);
+  const triggerSources = useMemo(() => session?.triggers.map(item => item.source).join("\u0000") ?? "", [session?.triggers]);
+  const relinkKey = useMemo(() => JSON.stringify(session?.relinks ?? {}), [session?.relinks]);
   const edit = session?.edits.find((item) => item.id === selectedEdit);
   const trigger = session?.triggers.find((item) => item.id === selectedTrigger);
   const updateViewport = () => {
@@ -102,15 +124,21 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
   };
 
   const invalidatePreview = () => {
+    previewGeneration.current += 1;
     audio.current?.pause();
+    audio.current?.removeAttribute("src");
+    audio.current?.load();
     setPreviewUrl(null);
     setAutoplayPreview(false);
+    if (previewFile.current) {
+      void invoke("mix_editor_discard_preview", { path: previewFile.current }).catch(() => {});
+      previewFile.current = null;
+    }
   };
   const commit = (next: MixSession) => {
     if (session) setHistory((items) => [...items.slice(-99), session]);
     setFuture([]);
     setSession({ ...next, modified_at: new Date().toISOString() });
-    setSaved(false);
     invalidatePreview();
   };
   const loadText = (text: string, path: string) => {
@@ -118,7 +146,7 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
     const next = native
       ? parseSession(text)
       : importLegacy(text, path.split(/[\\/]/).pop()?.replace(/\.(skydek\.)?(json|md)$/i, "") || "SkyDek Mix");
-    audio.current?.pause();
+    invalidatePreview();
     setSession(next);
     setHistory([]);
     setFuture([]);
@@ -129,63 +157,77 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
     setSelectedClip(null);
     setSessionPath(native ? path : null);
     setSourcePath(path);
-    setSaved(native);
-    setPreviewUrl(null);
+    setSavedSession(native ? next : null);
     setError("");
     setStatus(native ? "Session opened." : "Legacy mix imported. Save As creates a non-destructive .dek session.");
   };
   const open = async () => {
+    if (busy || busyRef.current || (!saved && !window.confirm("Open another session and discard unsaved Mix Editor changes?"))) return;
     try {
       const result = await invoke<OpenedMixSession | null>("mix_editor_open");
       if (result) loadText(result.text, result.path);
     } catch (cause) { setError(String(cause)); }
   };
   const importOldMix = async () => {
+    if (busy || busyRef.current || (!saved && !window.confirm("Import another mix and discard unsaved Mix Editor changes?"))) return;
     try {
       const result = await invoke<OpenedMixSession | null>("mix_editor_import_legacy");
       if (result) loadText(result.text, result.path);
     } catch (cause) { setError(`Could not import the older mix log. ${String(cause)}`); }
   };
   const save = async (saveAs = false) => {
-    if (!session) return;
+    if (!session || busy || busyRef.current) return;
+    const saving = session;
+    busyRef.current = true;
     setBusy(true);
     try {
       const path = await invoke<string | null>("mix_editor_save", {
-        text: JSON.stringify(session, null, 2),
+        text: JSON.stringify(saving, null, 2),
         path: saveAs ? null : sessionPath,
       });
       if (path) {
         setSessionPath(path);
         setSourcePath(path);
-        setSaved(true);
+        setSavedSession(saving);
         setStatus(`Saved ${path.split(/[\\/]/).pop()}`);
       }
     } catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   const preparePreview = async (playAfter = false) => {
-    if (!session) return;
+    if (!session || busy || renderBusyRef.current) return;
+    invalidatePreview();
+    const generation = previewGeneration.current;
+    renderBusyRef.current = true;
     setBusy(true);
     setAutoplayPreview(playAfter);
     setStatus("Reconstructing edited session through the SkyDek audio engine…");
     try {
-      const path = await invoke<string>("mix_editor_preview", {
+      const result = await invoke<{ path: string; start: number; end: number }>("mix_editor_preview", {
         text: JSON.stringify(session),
         sessionPath: sessionPath || sourcePath,
+        position,
       });
-      setPreviewUrl(`${convertFileSrc(path)}?v=${Date.now()}`);
+      if (generation !== previewGeneration.current) {
+        void invoke("mix_editor_discard_preview", { path: result.path }).catch(() => {});
+        return;
+      }
+      previewFile.current = result.path;
+      setPreviewRange({ start: result.start, end: result.end });
+      setPreviewUrl(`${convertFileSrc(result.path)}?v=${Date.now()}`);
       setStatus("Edited session ready for playback.");
     } catch (cause) {
       setAutoplayPreview(false);
       setError(String(cause));
-    } finally { setBusy(false); }
+    } finally { renderBusyRef.current = false; setBusy(false); }
   };
   const play = () => {
-    if (previewUrl) void audio.current?.play().catch((cause) => setError(String(cause)));
+    if (previewUrl && position >= previewRange.start && position < previewRange.end) void audio.current?.play().catch((cause) => setError(String(cause)));
     else void preparePreview(true);
   };
   const exportMix = async (format: "wav" | "mp3") => {
-    if (!session) return;
+    if (!session || busy || renderBusyRef.current) return;
+    renderBusyRef.current = true;
     setBusy(true);
     setStatus(`Rendering ${format.toUpperCase()}…`);
     try {
@@ -194,12 +236,15 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
       });
       if (path) setStatus(`Exported ${path}`);
     } catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); }
+    finally { renderBusyRef.current = false; setBusy(false); }
   };
   const seek = (seconds: number) => {
     const next = Math.max(0, Math.min(total, seconds));
     setPosition(next);
-    if (audio.current) audio.current.currentTime = next;
+    if (audio.current && previewUrl) {
+      if (next >= previewRange.start && next <= previewRange.end) audio.current.currentTime = next - previewRange.start;
+      else invalidatePreview();
+    }
   };
   const beginPlayheadDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (!session || busy) return;
@@ -222,7 +267,6 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
     setFuture((items) => [session, ...items]);
     setSession(history.at(-1)!);
     setHistory((items) => items.slice(0, -1));
-    setSaved(false);
     invalidatePreview();
   };
   const redo = () => {
@@ -230,7 +274,6 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
     setHistory((items) => [...items, session]);
     setSession(future[0]);
     setFuture((items) => items.slice(1));
-    setSaved(false);
     invalidatePreview();
   };
   const addEdit = (lane: Lane, seconds = position) => {
@@ -270,7 +313,6 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
       if (!moved) return;
       setHistory((items) => [...items.slice(-99), before]);
       setFuture([]);
-      setSaved(false);
       invalidatePreview();
       setStatus("Keyframe moved. Rebuild preview to hear the edit.");
     };
@@ -286,6 +328,17 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
     } catch (cause) { setError(String(cause)); }
   };
   const replaceClip = async (clip: Clip) => {
+    if (!session) return;
+    try {
+      const path = await chooseMedia(clip.path);
+      if (path) {
+        commit(replaceDeckClip(session, clip.deck, clip.start, clip.end, clip.path, path));
+        setSelectedClip({ ...clip, path });
+        setStatus("Replaced only the selected clip. Other uses of the source remain unchanged.");
+      }
+    } catch (cause) { setError(String(cause)); }
+  };
+  const relinkClipSource = async (clip: Clip) => {
     if (!session) return;
     try {
       const path = await chooseMedia(clip.path);
@@ -305,11 +358,38 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
 
   useEffect(() => {
     if (initial && openedInitial.current !== initial.path) {
+      if (session && !saved && !window.confirm("Open another session and discard unsaved Mix Editor changes?")) return;
       openedInitial.current = initial.path;
       try { loadText(initial.text, initial.path); } catch (cause) { setError(String(cause)); }
     }
   }, [initial]);
   useEffect(() => { editorDialog.current?.focus(); }, []);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    editorDialog.current?.focus();
+    const onTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !editorDialog.current) return;
+      const focusable = Array.from(editorDialog.current.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex='-1'])"))
+        .filter(item => item.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === editorDialog.current)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    const keepFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && editorDialog.current && !editorDialog.current.contains(event.target)) editorDialog.current.focus();
+    };
+    document.addEventListener("keydown", onTab, true);
+    document.addEventListener("focusin", keepFocus);
+    return () => {
+      document.removeEventListener("keydown", onTab, true);
+      document.removeEventListener("focusin", keepFocus);
+      document.body.style.overflow = originalOverflow;
+      previous?.isConnected && previous.focus();
+    };
+  }, []);
   useEffect(() => {
     const frame = requestAnimationFrame(updateViewport);
     const element = timelineScroll.current;
@@ -324,7 +404,18 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
       .then((items) => { if (active) setSources(items); })
       .catch((cause) => { if (active) setError(String(cause)); });
     return () => { active = false; };
-  }, [session, sessionPath, sourcePath]);
+  }, [session?.source.log, triggerSources, relinkKey, sessionPath, sourcePath]);
+  useEffect(() => {
+    let active = true;
+    const paths = [...new Set(clips.flat().map(clip => clip.path))];
+    for (const path of paths) {
+      void invoke<number[]>("mix_editor_waveform_summary", { path }).then(bars => {
+        if (!active || !bars.length) return;
+        setWaveforms(current => ({ ...current, [path]: bars }));
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [clips]);
   useEffect(() => {
     if (!busy) { setProgress({ running: false, done: 0, total: 0 }); return; }
     const poll = () => invoke<{ running: boolean; done: number; total: number }>("mix_editor_render_status").then(setProgress).catch(() => {});
@@ -333,43 +424,48 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
     return () => clearInterval(timer);
   }, [busy]);
   useEffect(() => () => { if (recordingUrl) URL.revokeObjectURL(recordingUrl); }, [recordingUrl]);
+  useEffect(() => () => {
+    if (previewFile.current) void invoke("mix_editor_discard_preview", { path: previewFile.current }).catch(() => {});
+  }, []);
 
   const onKey = (event: React.KeyboardEvent) => {
     const target = event.target as HTMLElement;
-    const formControl = /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(target.tagName);
+    const textControl = /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName) || target.isContentEditable;
     if (event.key === "Escape") {
-      if (saved || confirm("Close without saving Mix Editor changes?")) onClose();
+      event.preventDefault(); event.stopPropagation();
+      if (showShortcuts) setShowShortcuts(false);
+      else if (selectedEdit || selectedTrigger || selectedClip) { setSelectedEdit(null); setSelectedTrigger(null); setSelectedClip(null); }
+      else close();
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && session) {
       event.preventDefault();
       void save(event.shiftKey);
-    } else if (formControl) {
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+      event.preventDefault(); void open();
+    } else if (textControl) {
       return;
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") { event.preventDefault(); redo(); }
+    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+      event.preventDefault();
+      if (!session) return;
+      const currentEdit = session.edits.find(item => item.id === selectedEdit);
+      const currentTrigger = session.triggers.find(item => item.id === selectedTrigger);
+      if (currentEdit) { const copy = { ...currentEdit, id: crypto.randomUUID(), seconds: Math.min(total, currentEdit.seconds + 0.25) }; commit({ ...session, edits: [...session.edits, copy] }); setSelectedEdit(copy.id); }
+      else if (currentTrigger) { const copy = { ...currentTrigger, id: crypto.randomUUID(), seconds: Math.min(total, currentTrigger.seconds + 0.25) }; commit({ ...session, triggers: [...session.triggers, copy] }); setSelectedTrigger(copy.id); }
+    } else if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight") && session) {
+      event.preventDefault();
+      const delta = (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : 0.05);
+      if (selectedEdit) commit({ ...session, edits: session.edits.map(item => item.id === selectedEdit ? { ...item, seconds: Math.max(0, Math.min(total, item.seconds + delta)) } : item) });
+      else if (selectedTrigger) commit({ ...session, triggers: session.triggers.map(item => item.id === selectedTrigger ? { ...item, seconds: Math.max(0, Math.min(total, item.seconds + delta)) } : item) });
     } else if (event.code === "Space" && session) {
       event.preventDefault();
       if (audio.current && !audio.current.paused) audio.current.pause(); else play();
-    } else if (event.key === "ArrowLeft") seek(position - (event.shiftKey ? 5 : 0.25));
-    else if (event.key === "ArrowRight") seek(position + (event.shiftKey ? 5 : 0.25));
-    else if (event.key === "Home") seek(0);
-    else if (event.key === "End") seek(total);
-    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redo() : undo(); }
-    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") { event.preventDefault(); redo(); }
-    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d" && selectedEdit && session) {
-      event.preventDefault();
-      const current = session.edits.find((item) => item.id === selectedEdit);
-      if (current) {
-        const copy = { ...current, id: crypto.randomUUID(), seconds: Math.min(total, current.seconds + 0.25) };
-        commit({ ...session, edits: [...session.edits, copy] });
-        setSelectedEdit(copy.id);
-      }
-    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d" && selectedTrigger && session) {
-      event.preventDefault();
-      const current = session.triggers.find((item) => item.id === selectedTrigger);
-      if (current) {
-        const copy = { ...current, id: crypto.randomUUID(), seconds: Math.min(total, current.seconds + 0.25) };
-        commit({ ...session, triggers: [...session.triggers, copy] });
-        setSelectedTrigger(copy.id);
-      }
-    }
+    } else if (event.key === "ArrowLeft") { event.preventDefault(); seek(position - (event.shiftKey ? 5 : 0.25)); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); seek(position + (event.shiftKey ? 5 : 0.25)); }
+    else if (event.key === "Home") { event.preventDefault(); seek(0); }
+    else if (event.key === "End") { event.preventDefault(); seek(total); }
+    else if (event.key === "+" || event.key === "=") { event.preventDefault(); setZoom(value => Math.min(16, value + 0.5)); }
+    else if (event.key === "-" || event.key === "_") { event.preventDefault(); setZoom(value => Math.max(1, value - 0.5)); }
     else if ((event.key === "Delete" || event.key === "Backspace") && selectedEdit && session) {
       event.preventDefault();
       commit({ ...session, edits: session.edits.filter((item) => item.id !== selectedEdit) });
@@ -383,33 +479,44 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
 
   const missing = sources.some((source) => !source.resolved);
   const missingRequired = sources.some((source) => source.kind !== "recording" && !source.resolved);
-  const close = () => { if (saved || confirm("Close without saving Mix Editor changes?")) onClose(); };
+  const limitations = session ? [
+    ...session.migration.warnings,
+    ...(!session.source.log.mic_file ? ["This recording has no microphone stem; mic audio cannot be reconstructed."] : []),
+    ...(session.source.log.capture_revision !== 1 ? ["Rapid sample presses and effect changes may have been missed by the original snapshot log."] : []),
+  ].filter((message, index, all) => all.indexOf(message) === index) : [];
+  const close = () => { if (busy || busyRef.current || renderBusyRef.current) return; if (saved || confirm("Close without saving Mix Editor changes?")) onClose(); };
 
   return <div className="mix-replay-backdrop">
     <section ref={editorDialog} className="mix-replay mix-editor mix-editor-v2" role="dialog" aria-modal="true" aria-label="Mix Editor" tabIndex={-1} onKeyDown={onKey}>
       <header className="mix-editor-header">
         <div><small>SKYDEK DJ · BUILD 02</small><h2>Mix Editor</h2></div>
         <div className="mix-editor-session-title">{session ? <><strong>{session.name}</strong><span>{saved ? "Saved" : "Unsaved changes"}</span></> : <span>No session open</span>}</div>
-        <button className="mix-editor-close" onClick={close} aria-label="Close Mix Editor">×</button>
+        <button className="mix-editor-close" disabled={busy} onClick={close} aria-label="Close Mix Editor">×</button>
       </header>
 
       <nav className="mix-editor-toolbar" aria-label="Mix Editor commands">
-        <button onClick={() => void open()}>Open .dek</button>
-        <button title="Convert an older SkyDek JSON or Markdown recording log into an editable session" onClick={() => void importOldMix()}>Import old mix log</button>
+        <button disabled={busy} onClick={() => void open()}>Open .dek</button>
+        <button disabled={busy} title="Convert an older SkyDek JSON or Markdown recording log into an editable session" onClick={() => void importOldMix()}>Import old mix log</button>
         <span className="toolbar-divider" />
         <button disabled={!session || busy} onClick={() => void save(false)}>Save</button>
         <button disabled={!session || busy} onClick={() => void save(true)}>Save As</button>
         <button disabled={!history.length || busy} onClick={undo}>Undo</button>
         <button disabled={!future.length || busy} onClick={redo}>Redo</button>
+        <button type="button" aria-expanded={showShortcuts} onClick={() => setShowShortcuts(value => !value)}>Keyboard help</button>
         <span className="toolbar-spacer" />
         <button disabled={!session || busy || missingRequired} onClick={() => void exportMix("wav")}>Export WAV</button>
         <button disabled={!session || busy || missingRequired} onClick={() => void exportMix("mp3")}>Export MP3</button>
       </nav>
+      {showShortcuts && <div className="mix-editor-shortcuts" role="region" aria-label="Mix Editor keyboard shortcuts">
+        <strong>Keyboard controls</strong><span>Space play/pause · ←/→ seek 0.25s · Shift+←/→ seek 5s · Home/End start/end</span>
+        <span>Alt+←/→ move selected point 0.05s · Shift+Alt+←/→ move 1s · +/− zoom</span>
+        <span>Ctrl+O open · Ctrl+S save · Ctrl+Shift+S Save As · Ctrl+Z/Y undo/redo · Ctrl+D duplicate · Delete remove · Esc clear/close</span>
+      </div>}
 
       {!session ? <div className="mix-editor-empty"><div className="empty-mark">◇</div><h3>Open a recorded performance</h3><p>Open a native .dek session or convert an older SkyDek recording log without changing its original files.</p><div className="empty-actions"><button onClick={() => void open()}>Open .dek session</button><button onClick={() => void importOldMix()}>Import old mix log</button></div></div> : <>
         <div className="mix-editor-transport">
           <button onClick={() => seek(0)} title="Go to beginning">|◀</button>
-          <button className="transport-primary" disabled={busy || missingRequired} onClick={play}>▶ Play session</button>
+          <button className="transport-primary" disabled={busy || missingRequired} onClick={play} title="Audition a 30-second region around the playhead (Space)">▶ Preview 30s</button>
           <button onClick={() => audio.current?.pause()}>❚❚</button>
           <button onClick={() => { audio.current?.pause(); seek(0); }}>■</button>
           <time>{fmt(position)}<small> / {fmt(total)}</small></time>
@@ -422,16 +529,19 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
         <audio
           ref={audio}
           src={previewUrl || undefined}
-          onCanPlay={() => { if (autoplayPreview) { setAutoplayPreview(false); void audio.current?.play().catch((cause) => setError(String(cause))); } }}
-          onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
-          onEnded={() => setPosition(total)}
+          onCanPlay={() => { if (autoplayPreview && audio.current) { audio.current.currentTime = Math.max(0, Math.min(audio.current.duration || 0, position - previewRange.start)); setAutoplayPreview(false); void audio.current.play().catch((cause) => setError(String(cause))); } }}
+          onTimeUpdate={(event) => setPosition(previewRange.start + event.currentTarget.currentTime)}
+          onEnded={() => setPosition(previewRange.end)}
           onError={() => setError("Edited session preview could not be played.")}
         />
 
-        {missing && <div className="mix-editor-relink"><strong>{missingRequired ? "Missing required media" : "Original recording unavailable (optional)"}</strong>{sources.filter((source) => !source.resolved).map((source) => <button key={source.original} onClick={async () => { const path = await chooseMedia(source.original); if (path) commit({ ...session, relinks: { ...session.relinks, [source.original]: path } }); }}>Relink {source.kind === "recording" ? "recording" : source.original.split(/[\\/]/).pop()}</button>)}</div>}
-        {session.migration.warnings.length > 0 && <details className="mix-editor-import-notes"><summary>Imported recording notes ({session.migration.warnings.length})</summary>{session.migration.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>}
+        {missing && <div className="mix-editor-relink"><strong>{missingRequired ? "Missing required media" : "Original recording unavailable (optional)"}</strong>{sources.filter((source) => !source.resolved).map((source) => <button key={source.original} onClick={async () => { const path = await chooseMedia(source.original); if (path) commit({ ...session, relinks: { ...session.relinks, [source.original]: path } }); }}>Relink {source.kind === "recording" ? "recording" : source.kind === "mic" ? "microphone stem" : source.original.split(/[\\/]/).pop()}</button>)}</div>}
+        {limitations.length > 0 && <details className="mix-editor-import-notes"><summary>Recording fidelity notes ({limitations.length})</summary>{limitations.map((warning) => <p key={warning}>{warning}</p>)}</details>}
 
-        <div className="mix-editor-workspace">
+        <div className="mix-editor-groupbar" aria-label="Automation lane groups">Automation
+          {(["DEK 1", "DEK 2", "MIXER"] as const).map(group => <button key={group} aria-expanded={!collapsedGroups.includes(group)} onClick={() => setCollapsedGroups(current => current.includes(group) ? current.filter(value => value !== group) : [...current, group])}>{collapsedGroups.includes(group) ? "+" : "−"} {group}</button>)}
+        </div>
+        <div className="mix-editor-workspace" style={{ gridTemplateColumns: `minmax(0, 1fr) 8px ${inspectorWidth}px` }}>
           <div className="mix-editor-timeline-shell">
             <div className="timeline-corner"><span>LAYERS</span><small>{fmt(total)}</small></div>
             <div className="mix-editor-scroll" ref={timelineScroll} onScroll={updateViewport}>
@@ -448,10 +558,11 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
                       key={`${clip.path}-${index}`}
                       className={`timeline-clip deck-${deckIndex + 1} ${selectedClip?.deck === clip.deck && selectedClip.path === clip.path && selectedClip.start === clip.start ? "selected" : ""}`}
                       style={{ left: `${clip.start / Math.max(0.01, total) * 100}%`, width: `${Math.max(0.6, (clip.end - clip.start) / Math.max(0.01, total) * 100)}%` }}
-                      title={`${clip.path}\nDouble-click to replace source audio`}
+                      title={`${clip.path}\nDouble-click to replace this clip only`}
                       onClick={() => { setSelectedClip(clip); setSelectedEdit(null); setSelectedTrigger(null); }}
+                      onFocus={() => { setSelectedClip(clip); setSelectedEdit(null); setSelectedTrigger(null); }}
                       onDoubleClick={() => void replaceClip(clip)}
-                    >{clip.path.split(/[\\/]/).pop()}</button>)}
+                    >{waveforms[clip.path] ? <span className="clip-waveform" aria-hidden="true">{waveforms[clip.path].map((height, bar) => <i key={bar} style={{ height: `${Math.round(height * 90)}%` }} />)}</span> : <span className="clip-no-waveform">Waveform unavailable</span>}<span className="clip-title">{clip.path.split(/[\\/]/).pop()}</span></button>)}
                     <i className="row-playhead" style={{ left: `${position / Math.max(0.01, total) * 100}%` }} />
                   </div>
                 </div>)}
@@ -465,6 +576,8 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
                       style={{ left: `${item.seconds / Math.max(0.01, total) * 100}%` }}
                       title={`${fmt(item.seconds)} · ${item.source.split(/[\\/]/).pop()} · drag to move`}
                       onClick={() => { setSelectedTrigger(item.id); setSelectedEdit(null); setSelectedClip(null); seek(item.seconds); }}
+                      onFocus={() => { setSelectedTrigger(item.id); setSelectedEdit(null); setSelectedClip(null); }}
+                      aria-label={`Sample ${item.source.split(/[\\/]/).pop()} at ${fmt(item.seconds)}`}
                       onPointerDown={(event) => beginDrag("trigger", item.id, event)}
                     />)}
                     <i className="row-playhead" style={{ left: `${position / Math.max(0.01, total) * 100}%` }} />
@@ -486,15 +599,17 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
                   </div>
                 </div>
 
-                {lanes.map((lane, index) => <div className={`timeline-row automation-row ${index === 0 || lanes[index - 1].group !== lane.group ? "group-start" : ""}`} key={lane.key}>
+                {lanes.map((lane, index) => <div className={`timeline-row automation-row ${collapsedGroups.includes(lane.group) ? "collapsed" : ""} ${index === 0 || lanes[index - 1].group !== lane.group ? "group-start" : ""}`} key={lane.key}>
                   <div className="timeline-layer"><button className="add-keyframe" title={`Add ${lane.label} keyframe at playhead`} onClick={() => addEdit(lane)}>◆</button><strong>{lane.group}</strong><small>{lane.label}</small></div>
                   <div className="timeline-track" onDoubleClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); addEdit(lane, timelineSeconds(event.clientX, box.left, box.width, total)); }}>
-                    {visibleTimelineItems(session.edits.filter((item) => item.lane === lane.key), viewport.start, viewport.end, selectedEdit).map((item) => <button
+                    {visibleTimelineItems(editsByLane.get(lane.key) ?? [], viewport.start, viewport.end, selectedEdit).map((item) => <button
                       key={item.id}
                       className={`timeline-keyframe ${selectedEdit === item.id ? "selected" : ""}`}
                       style={{ left: `${item.seconds / Math.max(0.01, total) * 100}%` }}
                       title={`${fmt(item.seconds)} · ${item.value.toFixed(2)} · drag to move`}
                       onClick={() => { setSelectedEdit(item.id); setSelectedTrigger(null); setSelectedClip(null); seek(item.seconds); }}
+                      onFocus={() => { setSelectedEdit(item.id); setSelectedTrigger(null); setSelectedClip(null); }}
+                      aria-label={`${lane.group} ${lane.label} keyframe at ${fmt(item.seconds)}, value ${item.value.toFixed(2)}`}
                       onPointerDown={(event) => beginDrag("edit", item.id, event)}
                     />)}
                     <i className="row-playhead" style={{ left: `${position / Math.max(0.01, total) * 100}%` }} />
@@ -504,8 +619,17 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
             </div>
           </div>
 
+          <div className="mix-editor-splitter" role="separator" aria-label="Resize Mix Editor inspector" aria-orientation="vertical" tabIndex={0}
+            onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); event.stopPropagation(); setInspectorWidth(value => Math.max(240, Math.min(560, value + (event.key === "ArrowLeft" ? 20 : -20)))); } }}
+            onPointerDown={event => { const start = event.clientX, width = inspectorWidth; const move = (next: PointerEvent) => setInspectorWidth(Math.max(240, Math.min(560, width + start - next.clientX))); const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true }); }} />
           <aside className="mix-editor-inspector">
             <h3>Properties</h3>
+            <details className="mix-editor-point-list"><summary>All keyframes ({session.edits.length + session.triggers.length})</summary>
+              {[...session.edits.map(item => ({ id: item.id, seconds: item.seconds, name: item.lane, type: "edit" as const })), ...session.triggers.map(item => ({ id: item.id, seconds: item.seconds, name: item.source.split(/[\\/]/).pop() || "Sample", type: "trigger" as const }))]
+                .sort((a, b) => a.seconds - b.seconds).map(item => <button key={item.id} className={selectedEdit === item.id || selectedTrigger === item.id ? "selected" : ""} onClick={() => { seek(item.seconds); setSelectedEdit(item.type === "edit" ? item.id : null); setSelectedTrigger(item.type === "trigger" ? item.id : null); setSelectedClip(null); }}>
+                  <time>{fmt(item.seconds)}</time><span>{item.name}</span>
+                </button>)}
+            </details>
             {edit ? <>
               <span className="property-type">AUTOMATION KEYFRAME</span>
               <h4>{lanes.find((lane) => lane.key === edit.lane)?.group} · {lanes.find((lane) => lane.key === edit.lane)?.label}</h4>
@@ -517,6 +641,7 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
               <h4>{trigger.source.split(/[\\/]/).pop()}</h4>
               <label>Time<input type="number" min="0" max={total} step="0.05" value={trigger.seconds} onChange={(event) => commit({ ...session, triggers: session.triggers.map((item) => item.id === trigger.id ? { ...item, seconds: Math.max(0, Math.min(total, +event.target.value)) } : item) })} /></label>
               <label>Gain<input type="range" min="0" max="2" step="0.01" value={trigger.gain} onChange={(event) => commit({ ...session, triggers: session.triggers.map((item) => item.id === trigger.id ? { ...item, gain: +event.target.value } : item) })} /></label>
+              <p className="property-path">{trigger.source}</p>
               <button onClick={() => void replaceTrigger(trigger)}>Replace sound</button>
               <div className="inspector-actions"><button onClick={() => { const copy = { ...trigger, id: crypto.randomUUID(), seconds: Math.min(total, trigger.seconds + 0.25) }; commit({ ...session, triggers: [...session.triggers, copy] }); setSelectedTrigger(copy.id); }}>Duplicate</button><button className="danger" onClick={() => { commit({ ...session, triggers: session.triggers.filter((item) => item.id !== trigger.id) }); setSelectedTrigger(null); }}>Delete</button></div>
             </> : selectedClip ? <>
@@ -524,11 +649,13 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
               <h4>DEK {selectedClip.deck + 1}</h4>
               <p title={selectedClip.path}>{selectedClip.path.split(/[\\/]/).pop()}</p>
               <dl><dt>In</dt><dd>{fmt(selectedClip.start)}</dd><dt>Out</dt><dd>{fmt(selectedClip.end)}</dd></dl>
-              <button onClick={() => void replaceClip(selectedClip)}>Replace source audio</button>
-              {session.relinks[selectedClip.path] && <small>Using: {session.relinks[selectedClip.path].split(/[\\/]/).pop()}</small>}
+              <p className="property-path">{selectedClip.path}</p>
+              <button onClick={() => void replaceClip(selectedClip)}>Replace this clip only</button>
+              <button onClick={() => void relinkClipSource(selectedClip)}>Relink this source everywhere</button>
+              {session.relinks[selectedClip.path] && <small>Relinked everywhere to: {session.relinks[selectedClip.path].split(/[\\/]/).pop()}</small>}
             </> : <>
               <span className="property-type">SESSION</span>
-              <label>Name<input value={session.name} onChange={(event) => { setSession({ ...session, name: event.target.value.slice(0, 120), modified_at: new Date().toISOString() }); setSaved(false); }} /></label>
+              <label>Name<input value={session.name} onChange={(event) => { setSession({ ...session, name: event.target.value.slice(0, 120), modified_at: new Date().toISOString() }); }} /></label>
               <dl><dt>Duration</dt><dd>{fmt(total)}</dd><dt>Keyframes</dt><dd>{session.edits.length}</dd><dt>Samples</dt><dd>{session.triggers.length}</dd><dt>Log events</dt><dd>{session.markers.length}</dd><dt>Media</dt><dd>{sources.filter((source) => source.resolved).length}/{sources.length}</dd></dl>
               <button onClick={() => void addSample()}>Add sample at playhead</button>
               <label className="original-recording">Original recording<input type="file" accept=".mp3,.wav,audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) { if (recordingUrl) URL.revokeObjectURL(recordingUrl); setRecordingUrl(URL.createObjectURL(file)); } }} /></label>
@@ -543,6 +670,7 @@ export function MixEditor({ onClose, initial }: { onClose: () => void; initial?:
           <span>Master {Math.round((frame?.master ?? 0) * 100)}%</span>
           <span>DEK 1 {frame?.decks[0].playing ? "playing" : "paused"}</span>
           <span>DEK 2 {frame?.decks[1].playing ? "playing" : "paused"}</span>
+          <span>{session.source.log.mic_file ? "Mic stem included" : "Mic unavailable in this log"}</span>
           <span>{session.migration.imported_from === "legacy-json" ? "Converted legacy log" : ".dek session"}</span>
         </footer>
       </>}

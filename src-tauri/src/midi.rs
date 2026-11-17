@@ -654,6 +654,7 @@ mod tests {
             commands: Arc::new(ArrayQueue::new(256)),
             views: Arc::new(ArrayQueue::new(16)),
             error: Arc::new(Mutex::new(String::new())),
+            mic_status: Arc::new(Mutex::new(String::new())),
             path: PathBuf::new(),
             device: String::new(),
             rate: 48000,

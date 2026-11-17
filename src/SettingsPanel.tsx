@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getVersion } from "@tauri-apps/api/app";
-import { check } from "@tauri-apps/plugin-updater";
+import { checkSkyDekUpdate } from "./updateService";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { GeneralSettings, type GeneralSettingsProps } from "./GeneralSettings";
 import { MapperPanel, type Mappings } from "./MapperPanel";
@@ -40,33 +40,23 @@ export function SettingsPanel(props: SettingsPanelProps) {
     setPage(next);
   }
   const [message, setMessage] = useState("");
-  const [updateState, setUpdateState] = useState<"idle" | "checking" | "current" | "available" | "error">("idle");
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "current" | "available" | "error" | "beta" | "downloading" | "restarting">("idle");
   const [latestVersion, setLatestVersion] = useState("");
   const [currentVersion, setCurrentVersion] = useState("");
-  const [releaseUrl, setReleaseUrl] = useState("");
-  const [pendingUpdate, setPendingUpdate] = useState<any>(null);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
   async function checkForUpdates() {
     setUpdateState("checking");
     try {
-      const signedUpdate = await check();
-      if (signedUpdate) {
-        setPendingUpdate(signedUpdate);
-        setLatestVersion(signedUpdate.version);
-        setReleaseUrl("https://github.com/NewGrndCo/SkyDek-DJ/releases");
+      const result = await checkSkyDekUpdate();
+      if (result.kind === "available") {
+        setPendingUpdate(result.update);
+        setLatestVersion(result.update.version);
         setUpdateState("available");
         return;
       }
-      const response = await fetch("https://api.github.com/repos/NewGrndCo/SkyDek-DJ/releases/latest", { headers: { Accept: "application/vnd.github+json" } });
-      if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
-      const release = await response.json() as { tag_name?: string; html_url?: string };
-      const latest = (release.tag_name || "").replace(/^v/i, "");
-      setLatestVersion(latest); setReleaseUrl(release.html_url || "https://github.com/NewGrndCo/SkyDek-DJ/releases");
-      const installed = await getVersion();
-      setCurrentVersion(installed);
-      const current = installed.split(".").map(Number), next = latest.split(".").map(Number);
-      const firstDifference = next.findIndex((part, index) => part !== (current[index] || 0));
-      const newer = next.length === 3 && firstDifference >= 0 && next[firstDifference] > (current[firstDifference] || 0);
-      setUpdateState(newer ? "available" : "current");
+      setPendingUpdate(null);
+      if (result.kind === "current") setCurrentVersion(result.version);
+      setUpdateState(result.kind);
     } catch (error) { setUpdateState("error"); setMessage(`Update check failed: ${String(error)}`); }
   }
   useEffect(() => {
@@ -75,10 +65,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
     return () => window.removeEventListener("skydek-check-updates", handler);
   }, []);
   async function installUpdate() {
-    if (!pendingUpdate) { window.open(releaseUrl, "_blank", "noopener,noreferrer"); return; }
-    setMessage("Downloading update…");
-    await pendingUpdate.downloadAndInstall();
-    await relaunch();
+    if (!pendingUpdate) return;
+    setUpdateState("downloading");
+    try { await pendingUpdate.downloadAndInstall(); setUpdateState("restarting"); await relaunch(); }
+    catch (error) { setUpdateState("error"); setMessage(`Update installation failed: ${String(error)}`); }
   }
   const root = useRef<HTMLElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -139,7 +129,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <div className="settings-content" ref={scroll}>
           {pages.map(([key, label]) => <div key={key} role="tabpanel" id={`${id}-panel-${key}`} aria-labelledby={`${id}-tab-${key}`} hidden={page !== key} tabIndex={0}>
             <div className="settings-page-heading"><h3>{label}</h3></div>
-            {key === "controller" && visited.has(key) && <MapperPanel initial={props.mappings} profiles={props.preferences.profiles} activeProfile={props.preferences.active_profile} />}
+            {key === "controller" && visited.has(key) && <MapperPanel initial={props.mappings} profiles={props.preferences.profiles} activeProfile={props.preferences.active_profile} active={page === key} />}
             {visited.has(key) && (key === "general" || key === "audio" || key === "controller" || key === "autodj") && <GeneralSettings {...props} section={key} />}
             {key === "appearance" && <div className="settings-appearance">
               <label>Skin<select value={skin} onChange={event => onSkinChange(event.target.value as SettingsSkin)}><option value="dark">Dark</option><option value="light">Light</option><option value="xbox">Xbox</option></select></label>
@@ -152,9 +142,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
             {key === "general" && <div className="settings-appearance"><h4>Updates</h4>
               <div className="settings-actions">
                 <button type="button" onClick={() => void checkForUpdates()} disabled={updateState === "checking"}>{updateState === "checking" ? "Checking…" : "Check for updates"}</button>
-                {updateState === "available" && <button type="button" onClick={() => void installUpdate()}>Install v{latestVersion}</button>}
+                {updateState === "available" && pendingUpdate && <button type="button" onClick={() => void installUpdate()}>Install v{latestVersion}</button>}
               </div>
-              <p role="status">{updateState === "current" ? `You are up to date (v${currentVersion}).` : updateState === "available" ? `Version ${latestVersion} is available.` : ""}</p>
+              <p role="status">{updateState === "current" ? `You are up to date (v${currentVersion}).` : updateState === "available" ? `Signed version ${latestVersion} is available.` : updateState === "beta" ? "Beta builds use a separate installer and do not install official updates." : updateState === "downloading" ? "Downloading and installing the signed update…" : updateState === "restarting" ? "Restarting SkyDek DJ…" : message}</p>
             </div>}
             {key === "midi" && page === key && midiContent}
           </div>)}

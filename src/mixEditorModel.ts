@@ -9,11 +9,11 @@ export type EditLane =
   | "filter_0" | "filter_1" | "wet_0" | "wet_1"
   | "effect_0" | "effect_1";
 export type Edit = { id: string; seconds: number; lane: EditLane; value: number };
-export type Trigger = { id: string; seconds: number; kind: "sample"; source: string; gain: number };
+export type Trigger = { id: string; seconds: number; kind: "sample"; source: string; gain: number; action?: "press" | "release"; mode?: "restart" | "toggle" | "overlap" | "hold" };
 export type Marker = { id: string; seconds: number; label: string; kind: "recorded" | "editor" };
 export type SourceReference = {
   id: string; original_path: string; relative_path: string | null; display_name: string;
-  media_type: "wav" | "mp3" | "unknown"; role: "deck" | "sample" | "recording";
+  media_type: "wav" | "mp3" | "unknown"; role: "deck" | "sample" | "recording" | "mic";
   duration: number | null; fingerprint: string | null;
 };
 export type SessionMetadata = { id: string; application: "SkyDek DJ"; generator: string };
@@ -28,6 +28,28 @@ export type MixSession = {
   relinks: Record<string, string>; export_settings: ExportSettings; migration: MigrationInfo;
   [key: string]: unknown;
 };
+
+/** Replace one contiguous deck clip in this editable copy of the performance log. */
+export function replaceDeckClip(session: MixSession, deck: number, start: number, end: number, original: string, replacement: string): MixSession {
+  if ((deck !== 0 && deck !== 1) || !replacement || start < 0 || end <= start) throw new Error("Invalid deck clip replacement.");
+  let changed = false;
+  const frames = session.source.log.frames.map(frame => {
+    if (frame.seconds < start || frame.seconds >= end || frame.decks[deck].path !== original) return frame;
+    changed = true;
+    const decks = [{ ...frame.decks[0] }, { ...frame.decks[1] }] as typeof frame.decks;
+    decks[deck].path = replacement;
+    return { ...frame, decks };
+  });
+  if (!changed) throw new Error("That clip is no longer available. Select it again.");
+  const sourceRefs = session.source_refs.some(ref => ref.original_path === replacement)
+    ? session.source_refs
+    : [...session.source_refs, {
+      id: crypto.randomUUID(), original_path: replacement, relative_path: null,
+      display_name: fileName(replacement), media_type: fileType(replacement), role: "deck" as const,
+      duration: null, fingerprint: null,
+    }];
+  return { ...session, source: { ...session.source, log: { ...session.source.log, frames } }, source_refs: sourceRefs };
+}
 
 const limits: Record<EditLane, [number, number]> = {
   crossfader: [-1, 1], master: [0, 1], sampler_volume: [0, 1],
@@ -64,6 +86,12 @@ export function visibleTimelineItems<T extends { id: string; seconds: number }>(
 }
 
 function deriveTriggers(log: MixLog): Trigger[] {
+  if (log.sample_commands?.length) return log.sample_commands.map((command, index) => ({
+    id: stableId("sample", `${command.seconds}:${command.path}:${command.action}`, index),
+    seconds: Math.min(command.seconds, log.frames.at(-1)?.seconds ?? command.seconds),
+    kind: "sample", source: command.path, gain: 0.65,
+    action: command.action, mode: command.mode,
+  }));
   const triggers: Trigger[] = [];
   let active = new Set<string>();
   for (const frame of log.frames) {
@@ -85,6 +113,7 @@ function deriveSourceReferences(log: MixLog, triggers: Trigger[]): SourceReferen
   }
   for (const trigger of triggers) if (!roles.has(trigger.source)) roles.set(trigger.source, "sample");
   if (log.audio_file && !roles.has(log.audio_file)) roles.set(log.audio_file, "recording");
+  if (log.mic_file && !roles.has(log.mic_file)) roles.set(log.mic_file, "mic");
   return [...roles.entries()].map(([path, role], index) => ({
     id: stableId("media", path, index), original_path: path, relative_path: null,
     display_name: fileName(path), media_type: fileType(path), role,
@@ -105,7 +134,9 @@ export function importLegacy(text: string, name: string): MixSession {
   const log = parseMixLog(text);
   const now = new Date().toISOString();
   const triggers = deriveTriggers(log);
-  const warnings = ["Build 01 recordings do not contain independent EQ-band, loop, or hot-cue identity automation."];
+  const warnings = ["Recordings do not contain independent EQ-band, loop, or hot-cue identity automation."];
+  if (log.capture_revision !== 1) warnings.push("Rapid sample presses and effect changes may be missing from this legacy recording's 10 Hz snapshots.");
+  if (!log.mic_file) warnings.push("Microphone audio cannot be reconstructed because this recording has no independent mic stem.");
   if (log.frames.some((frame) => frame.decks.some((deck) => deck.cue > 0))) {
     warnings.push("Cue positions were retained, but individual hot-cue actions were not identified by Build 01.");
   }
@@ -114,7 +145,11 @@ export function importLegacy(text: string, name: string): MixSession {
     created_at: now, modified_at: now,
     metadata: { id: crypto.randomUUID(), application: "SkyDek DJ", generator: "Build 02 Mix Editor" },
     source: { kind: "legacy-log", audio_file: log.audio_file, log },
-    source_refs: deriveSourceReferences(log, triggers), edits: [], triggers,
+    source_refs: deriveSourceReferences(log, triggers), edits: (log.effect_commands ?? []).map((command, index) => ({
+      id: stableId("fx", `${command.seconds}:${command.deck}:${command.effect}`, index),
+      seconds: Math.min(command.seconds, log.frames.at(-1)?.seconds ?? command.seconds),
+      lane: `effect_${command.deck}` as EditLane, value: command.active ? command.effect : 0,
+    })), triggers,
     markers: deriveMarkers(log), relinks: {}, export_settings: defaultExportSettings(),
     migration: { imported_from: "legacy-json", warnings },
   };
@@ -122,7 +157,7 @@ export function importLegacy(text: string, name: string): MixSession {
 
 function validateSourceReferences(value: unknown): SourceReference[] {
   if (!Array.isArray(value)) return [];
-  const roles = new Set(["deck", "sample", "recording"]);
+  const roles = new Set(["deck", "sample", "recording", "mic"]);
   const types = new Set(["wav", "mp3", "unknown"]);
   return value.map((item, index) => {
     if (!item || typeof item !== "object") throw new Error(`Media reference ${index + 1} is invalid.`);
@@ -172,7 +207,9 @@ export function parseSession(text: string): MixSession {
     if (!trigger || typeof trigger.id !== "string" || seen.has(trigger.id) || trigger.kind !== "sample" ||
         typeof trigger.source !== "string" || !trigger.source || !finite(trigger.seconds) ||
         trigger.seconds < 0 || trigger.seconds > maximum || !finite(trigger.gain) ||
-        trigger.gain < 0 || trigger.gain > 2) {
+        trigger.gain < 0 || trigger.gain > 2 ||
+        (trigger.action !== undefined && trigger.action !== "press" && trigger.action !== "release") ||
+        (trigger.mode !== undefined && !["restart", "toggle", "overlap", "hold"].includes(trigger.mode))) {
       throw new Error("The session has an invalid or duplicate sample trigger.");
     }
     seen.add(trigger.id);
@@ -204,6 +241,10 @@ export function reconstructed(session: MixSession, seconds: number): Frame {
   const base = frameAt(session.source.log.frames, at);
   if (!base) throw new Error("Session has no recorded frames.");
   const frame: Frame = { ...base, decks: [{ ...base.decks[0] }, { ...base.decks[1] }], samples: [...base.samples] };
+  for (const command of session.source.log.mic_commands ?? []) {
+    if (command.seconds > at) break;
+    frame.mic = command.state;
+  }
   for (const edit of [...session.edits].sort((a, b) => a.seconds - b.seconds || a.id.localeCompare(b.id))) {
     if (edit.seconds > at) break;
     if (edit.lane === "crossfader" || edit.lane === "master" || edit.lane === "sampler_volume") frame[edit.lane] = edit.value;

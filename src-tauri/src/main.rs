@@ -153,6 +153,7 @@ struct AppState {
     commands: Arc<ArrayQueue<Cmd>>,
     views: Arc<ArrayQueue<View>>,
     error: Arc<Mutex<String>>,
+    mic_status: Arc<Mutex<String>>,
     path: PathBuf,
     device: String,
     rate: u32,
@@ -185,6 +186,7 @@ struct Snapshot {
     error: String,
     device: String,
     sample_rate: u32,
+    mic_status: String,
     tab: String,
     recording: bool,
     recorded_seconds: f64,
@@ -288,6 +290,9 @@ impl AppState {
         }
         let mode = m.session.preferences.sampler_modes[i];
         self.send(Cmd::SamplePress(i, mode))?;
+        if let Some(path) = m.samples[i].clone() {
+            self.mixlog.lock().unwrap().record_sample(self.recorded_seconds(), path, "press", mode);
+        }
         m.sampler = i;
         m.tab = "sampler".into();
         m.last = format!("Sampler pad {} · {:?}", i + 1, mode);
@@ -346,6 +351,15 @@ fn preparation(m: &Model) -> Result<usize, String> {
     }
 }
 impl AppState {
+    fn recorded_seconds(&self) -> f64 {
+        self.recorder.frames.load(std::sync::atomic::Ordering::Relaxed) as f64 / self.rate as f64
+    }
+    fn record_sample_command(&self, index: usize, action: &str, mode: sampler::PlayMode) {
+        let path = self.model.lock().unwrap().samples.get(index).cloned().flatten();
+        if let Some(path) = path {
+            self.mixlog.lock().unwrap().record_sample(self.recorded_seconds(), path, action, mode);
+        }
+    }
     fn send(&self, c: Cmd) -> Result<(), String> {
         self.commands
             .push(c)
@@ -513,15 +527,25 @@ impl AppState {
             }
             "crossfade_seconds" => m.session.preferences.crossfade_seconds = v.clamp(0.1, 10.),
             "auto_cross" => self.send(Cmd::AutoCross(m.session.preferences.crossfade_seconds))?,
-            "fx_down" | "fx_up" => self.send(Cmd::FxGate(
-                d,
-                index.unwrap_or(0).min(5) as u8,
-                action == "fx_down",
-            ))?,
-            "fx_toggle" => self.send(Cmd::FxToggle(d, index.unwrap_or(0).min(5) as u8))?,
-            "sample_stop" => self.send(Cmd::StopSample(
-                index.unwrap_or(m.sampler).min(sampler::SAMPLER_SLOTS - 1),
-            ))?,
+            "fx_down" | "fx_up" => {
+                let effect = index.unwrap_or(0).min(5) as u8;
+                let active = action == "fx_down";
+                self.send(Cmd::FxGate(d, effect, active))?;
+                self.mixlog.lock().unwrap().record_effect(self.recorded_seconds(), d, effect, active);
+            },
+            "fx_toggle" => {
+                let effect = index.unwrap_or(0).min(5) as u8;
+                let active = m.view.decks[d].effect != effect;
+                self.send(Cmd::FxToggle(d, effect))?;
+                self.mixlog.lock().unwrap().record_effect(self.recorded_seconds(), d, effect, active);
+            },
+            "sample_stop" => {
+                let slot = index.unwrap_or(m.sampler).min(sampler::SAMPLER_SLOTS - 1);
+                self.send(Cmd::StopSample(slot))?;
+                if let Some(path) = m.samples[slot].clone() {
+                    self.mixlog.lock().unwrap().record_sample(self.recorded_seconds(), path, "release", m.session.preferences.sampler_modes[slot]);
+                }
+            },
             "sensitivity" => m.session.sensitivity = v.clamp(0.1, 4.),
             "play" => {
                 if m.loaded[d].is_none() {
@@ -755,7 +779,16 @@ impl AppState {
                 return self.sample_press(index).map(|_| ());
             }
             "next_sample" => m.sampler = (m.sampler + 1) % sampler::SAMPLER_SLOTS,
-            "stop_samples" => self.send(Cmd::StopSamples)?,
+            "stop_samples" => {
+                self.send(Cmd::StopSamples)?;
+                let seconds = self.recorded_seconds();
+                let mut log = self.mixlog.lock().unwrap();
+                for (index, path) in m.samples.iter().enumerate() {
+                    if let Some(path) = path {
+                        log.record_sample(seconds, path.clone(), "release", m.session.preferences.sampler_modes[index]);
+                    }
+                }
+            },
             "bpm" => {
                 if let Some(path) = m.loaded[d].clone() {
                     if let Some(t) = m.session.library.iter_mut().find(|t| t.path == path) {
@@ -796,6 +829,13 @@ impl AppState {
             }
             _ => return Err(format!("{action} is not available in this build")),
         }
+        if matches!(action, "mic_volume" | "mic_mute" | "mic_ducking") {
+            self.mixlog.lock().unwrap().record_mic(self.recorded_seconds(), mixlog::MicState {
+                volume: m.session.preferences.mic_volume as f32,
+                mute: m.session.preferences.mic_mute,
+                ducking: m.session.preferences.mic_ducking,
+            });
+        }
         m.last = format!("{} → Deck {}", action, d + 1);
         Ok(())
     }
@@ -834,6 +874,7 @@ fn snapshot(s: tauri::State<Arc<AppState>>, library_revision: Option<u32>) -> Sn
         error,
         device: s.device.clone(),
         sample_rate: s.rate,
+        mic_status: s.mic_status.lock().unwrap().clone(),
         tab: m.tab.clone(),
         recording,
         recorded_seconds: s.recorder.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
@@ -1408,7 +1449,13 @@ impl HeldAction {
             Self::Cue(deck) => Cmd::CueHold(deck, if cancel { 2 } else { 0 }),
             Self::Effect(deck, effect) => Cmd::FxGate(deck, effect, false),
             Self::Sample(index) => Cmd::StopSample(index),
-        })
+        })?;
+        match *self {
+            Self::Effect(deck, effect) => s.mixlog.lock().unwrap().record_effect(s.recorded_seconds(), deck, effect, false),
+            Self::Sample(index) => s.record_sample_command(index, "release", sampler::PlayMode::Hold),
+            Self::Cue(_) => {},
+        }
+        Ok(())
     }
 }
 
@@ -1615,6 +1662,17 @@ async fn waveform_data(
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
+fn mix_editor_waveform_summary(s: tauri::State<Arc<AppState>>, path: String) -> Vec<f32> {
+    let m = s.model.lock().unwrap();
+    let Some(waveform) = m.session.library.iter().find(|entry| entry.path == path).map(|entry| &entry.waveform) else { return vec![]; };
+    if waveform.is_empty() { return vec![]; }
+    (0..64).map(|index| {
+        let start = index * waveform.len() / 64;
+        let end = ((index + 1) * waveform.len() / 64).max(start + 1).min(waveform.len());
+        waveform[start..end].iter().copied().fold(0f32, f32::max).clamp(0.05, 1.)
+    }).collect()
+}
+#[tauri::command]
 async fn import_sound_folder(
     s: tauri::State<'_, Arc<AppState>>,
     refresh: bool,
@@ -1662,6 +1720,16 @@ fn controller_input() -> controller::ControllerSnapshot {
 fn audio_devices() -> Result<Vec<String>, String> {
     audio::output_devices()
 }
+#[tauri::command]
+fn mic_devices() -> Result<Vec<String>, String> { audio::input_devices() }
+#[tauri::command]
+fn select_mic_device(s: tauri::State<Arc<AppState>>, device: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
+    if s.recorder.is_open() { return Err("Stop recording before changing microphone input".into()); }
+    if let Some(name) = &device { if !audio::input_devices()?.contains(name) { return Err("Selected microphone is unavailable".into()); } }
+    let old = { let mut m = s.model.lock().unwrap(); std::mem::replace(&mut m.session.preferences.mic_device, device) };
+    if let Err(error) = s.save() { s.model.lock().unwrap().session.preferences.mic_device = old; return Err(error); }
+    app.restart();
+}
 
 #[tauri::command]
 fn select_audio_device(
@@ -1708,6 +1776,9 @@ fn clear_sample(s: tauri::State<Arc<AppState>>, index: usize) -> Result<(), Stri
     s.send(Cmd::ClearSample(index))?;
     {
         let mut m = s.model.lock().unwrap();
+        if let Some(path) = m.samples[index].clone() {
+            s.mixlog.lock().unwrap().record_sample(s.recorded_seconds(), path, "release", m.session.preferences.sampler_modes[index]);
+        }
         m.samples[index] = None;
         m.session.pad_paths[index] = None;
     }
@@ -1739,9 +1810,17 @@ impl AppState {
             let old = m.session.preferences.sampler_modes.clone();
             if all {
                 self.send(Cmd::StopSamples)?;
+                let seconds = self.recorded_seconds();
+                let mut log = self.mixlog.lock().unwrap();
+                for (slot, path) in m.samples.iter().enumerate() {
+                    if let Some(path) = path { log.record_sample(seconds, path.clone(), "release", old[slot]); }
+                }
                 m.session.preferences.sampler_modes = vec![mode; sampler::SAMPLER_SLOTS];
             } else {
                 self.send(Cmd::StopSample(index))?;
+                if let Some(path) = m.samples[index].clone() {
+                    self.mixlog.lock().unwrap().record_sample(self.recorded_seconds(), path, "release", old[index]);
+                }
                 m.session.preferences.sampler_modes[index] = mode;
             }
             old
@@ -1774,7 +1853,11 @@ fn worker(s: Arc<AppState>) {
                     s.mixlog
                         .lock()
                         .unwrap()
-                        .capture(seconds, &v, &m.loaded, &m.samples);
+                        .capture(seconds, &v, &m.loaded, &m.samples, mixlog::MicState {
+                            volume: m.session.preferences.mic_volume as f32,
+                            mute: m.session.preferences.mic_mute,
+                            ducking: m.session.preferences.mic_ducking,
+                        });
                 }
                 auto_dj::acknowledge(&mut m);
                 for d in 0..2 {
@@ -1888,10 +1971,15 @@ fn worker(s: Arc<AppState>) {
                             s.action("cue_hold_down", Some(deck), None, None)
                         } else if let Some(effect) = effect_id(&action) {
                             if s.model.lock().unwrap().session.preferences.effect_toggle {
-                                s.send(Cmd::FxToggle(deck, effect))
+                                let active = s.model.lock().unwrap().view.decks[deck].effect != effect;
+                                let result = s.send(Cmd::FxToggle(deck, effect));
+                                if result.is_ok() { s.mixlog.lock().unwrap().record_effect(s.recorded_seconds(), deck, effect, active); }
+                                result
                             } else {
                                 holds.insert(control.to_string(), HeldAction::Effect(deck, effect));
-                                s.send(Cmd::FxGate(deck, effect, true))
+                                let result = s.send(Cmd::FxGate(deck, effect, true));
+                                if result.is_ok() { s.mixlog.lock().unwrap().record_effect(s.recorded_seconds(), deck, effect, true); }
+                                result
                             }
                         } else if action == "sample" {
                             s.sample_press(None).map(|(index, mode)| {
@@ -2030,15 +2118,18 @@ async fn record(
                 return Ok(());
             };
             let path = path.with_extension(format);
-            s.recorder.start(path.clone(), s.rate)?;
-            s.mixlog
-                .lock()
-                .unwrap()
-                .start(path.to_string_lossy().into_owned());
+            s.recorder.start_with_mic_stem(path.clone(), s.rate)?;
+            let mut log = s.mixlog.lock().unwrap();
+            log.start(path.to_string_lossy().into_owned());
+            if let Some(active) = log.active.as_mut() {
+                active.mic_file = Some(s.recorder.mic_path.lock().unwrap().clone());
+            }
             Ok(())
         } else {
-            s.recorder.stop()?;
-            s.mixlog.lock().unwrap().finish().map(|_| ())
+            let audio_result = s.recorder.stop();
+            let log_result = s.mixlog.lock().unwrap().finish();
+            audio_result?;
+            log_result.map(|_| ())
         }
     })
     .await
@@ -2118,6 +2209,7 @@ fn main() {
             let _ = commands.push(Cmd::Linear(session.preferences.linear_curve));
             let views = Arc::new(ArrayQueue::new(16));
             let error = Arc::new(Mutex::new(session_warning));
+            let mic_status = Arc::new(Mutex::new("Connecting microphone…".to_string()));
             let recorder = recording::Recorder::new();
             let (device, rate) = audio::start_on_device(
                 commands.clone(),
@@ -2125,6 +2217,8 @@ fn main() {
                 error.clone(),
                 recorder.clone(),
                 session.preferences.audio_device.as_deref(),
+                session.preferences.mic_device.as_deref(),
+                mic_status.clone(),
             )
             .or_else(|cause| {
                 if session.preferences.audio_device.is_none() {
@@ -2136,6 +2230,8 @@ fn main() {
                     error.clone(),
                     recorder.clone(),
                     None,
+                    session.preferences.mic_device.as_deref(),
+                    mic_status.clone(),
                 )?;
                 let mut warning = error.lock().unwrap();
                 if !warning.is_empty() {
@@ -2183,6 +2279,7 @@ fn main() {
                 commands,
                 views,
                 error,
+                mic_status,
                 path,
                 device,
                 rate,
@@ -2289,6 +2386,8 @@ fn main() {
             sampler_mode,
             controller_input,
             audio_devices,
+            mic_devices,
+            select_mic_device,
             select_audio_device,
             toggle_fullscreen,
             library_view,
@@ -2302,6 +2401,7 @@ fn main() {
             sound_files,
             analyze_library,
             waveform_data,
+            mix_editor_waveform_summary,
             choose_record_path,
             record,
             mix_editor::mix_editor_open,
@@ -2311,6 +2411,7 @@ fn main() {
             mix_editor::mix_editor_relink,
             mix_editor::mix_editor_render,
             mix_editor::mix_editor_preview,
+            mix_editor::mix_editor_discard_preview,
             mix_editor::mix_editor_take_open,
             mix_editor::mix_editor_render_status,
             mix_editor::mix_editor_cancel_render
@@ -2390,6 +2491,7 @@ mod integration_tests {
             commands: Arc::new(ArrayQueue::new(256)),
             views: Arc::new(ArrayQueue::new(16)),
             error: Arc::new(Mutex::new(String::new())),
+            mic_status: Arc::new(Mutex::new(String::new())),
             path: root.join("session.json"),
             device: String::new(),
             rate: 48000,

@@ -10,3 +10,9 @@
 !define MUI_FINISHPAGE_TEXT "Installation is complete.$\r$\n$\r$\nLaunch SkyDek DJ and start mixing with your controller."
 !define MUI_FINISHPAGE_RUN_TEXT "Launch SkyDek DJ"
 !define MUI_BRANDINGTEXT "SkyDek DJ · New Ground Media"
+
+; Give .dek sessions their own document icon after Tauri registers the file type.
+!macro NSIS_HOOK_POSTINSTALL
+  WriteRegStr SHCTX "Software\Classes\SkyDek Mix Session\DefaultIcon" "" '$"$INSTDIR\resources\icons\project.ico$",0'
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+!macroend

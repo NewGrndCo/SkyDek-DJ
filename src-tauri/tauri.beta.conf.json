@@ -1,0 +1,24 @@
+{
+  "productName": "SkyDek DJ Beta",
+  "version": "0.10.20",
+  "identifier": "com.newground.skydek-dj-beta",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SkyDek DJ Beta",
+        "width": 1600,
+        "height": 1000,
+        "minWidth": 1100,
+        "minHeight": 740,
+        "center": true,
+        "dragDropEnabled": false
+      }
+    ]
+  },
+  "bundle": {
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false
+  },
+  "plugins": { "updater": { "endpoints": [] } }
+}

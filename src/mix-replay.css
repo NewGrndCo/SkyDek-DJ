@@ -35,3 +35,50 @@
 .mix-editor-v2 .timeline-playhead-handle::after{content:"";position:absolute;left:6px;top:9px;width:1px;height:900px;background:#c687ff;transform:rotate(-45deg);transform-origin:top;pointer-events:none;opacity:.75}
 .empty-actions{display:flex;justify-content:center;gap:8px}.mix-editor-import-notes{flex:0 0 auto;margin:0;padding:7px 12px;background:#191522;border-bottom:1px solid #4b385d;color:#c9b9d7}.mix-editor-import-notes summary{cursor:pointer;color:#d5a6f4;font-weight:700}.mix-editor-import-notes p{margin:6px 0 0;font-size:10px}.marker-dot{width:8px;height:8px;border-radius:2px;background:#7f8da5}.marker-row{height:27px}.timeline-marker{position:absolute!important;z-index:4;top:4px!important;width:3px!important;height:19px!important;min-height:19px!important;padding:0!important;border:0!important;border-radius:1px!important;background:#7b879a!important;transform:translateX(-50%);opacity:.72}.timeline-marker:hover,.timeline-marker:focus-visible{width:7px!important;background:#d6adf1!important;opacity:1}
 @media(prefers-reduced-motion:reduce){.mix-editor-v2 *{scroll-behavior:auto!important;transition:none!important}}
+
+/* Mix Editor: legible controls and a clear hierarchy at desktop and compact widths. */
+.mix-editor-v2{font-size:13px;line-height:1.45}
+.mix-editor-v2 button{min-height:34px;border-radius:7px}
+.mix-editor-v2 button:focus-visible,.mix-editor-v2 input:focus-visible,.mix-editor-v2 [tabindex]:focus-visible{outline:2px solid #d9a8ff;outline-offset:2px}
+.mix-editor-header small,.mix-editor-session-title span,.timeline-corner,.timeline-layer strong,.timeline-layer small,.mix-editor-footer,.mix-editor-v2 .mix-editor-ruler span{font-size:11px}
+.mix-editor-header{min-height:70px;grid-template-columns:minmax(150px,1fr) minmax(0,2fr) minmax(40px,1fr)}
+.mix-editor-session-title strong{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mix-editor-v2 .mix-editor-toolbar,.mix-editor-v2 .mix-editor-transport{height:auto;min-height:48px;flex-basis:auto;flex-wrap:wrap;row-gap:7px;padding:7px 12px}
+.mix-editor-v2 .mix-editor-toolbar button,.mix-editor-v2 .mix-editor-transport button{min-height:34px;padding:6px 10px}
+.mix-editor-shortcuts{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 14px;background:#1b1725;border-bottom:1px solid #5a3d73;color:#e8d9f0}
+.mix-editor-shortcuts strong{color:#e0a8ff}
+.mix-editor-groupbar{display:flex;align-items:center;gap:8px;padding:5px 12px;background:#151925;border-bottom:1px solid #333d4e;color:#abb7c8;font-size:11px;font-weight:700;letter-spacing:.07em}
+.mix-editor-groupbar button{min-height:28px;padding:3px 10px}
+.mix-editor-groupbar button[aria-expanded="true"]{color:#e7b7ff;border-color:#8058a1}
+.timeline-row.automation-row.collapsed{display:none}
+.mix-editor-splitter{position:relative;z-index:9;width:8px;cursor:col-resize;background:#252b39;border-inline:1px solid #444c5c;touch-action:none}
+.mix-editor-splitter:hover,.mix-editor-splitter:focus-visible{background:#9264b8}
+.mix-editor-timeline-shell{border-right:0}
+.timeline-row{height:36px}
+.timeline-row.clip-row{height:47px}
+.timeline-row.event-row{height:39px}
+.timeline-layer{grid-template-columns:24px 53px minmax(0,1fr)}
+.timeline-layer strong,.timeline-layer small{font-size:11px}
+.mix-editor-v2 .timeline-keyframe{width:16px!important;height:16px!important;min-height:16px!important;top:9px}
+.mix-editor-v2 .timeline-clip{height:36px!important;min-height:36px!important;top:5px;padding:5px 9px!important;font-size:11px!important;background:linear-gradient(180deg,#204153,#15313f)!important}
+.mix-editor-v2 .timeline-clip.deck-2{background:linear-gradient(180deg,#5d2940,#351d2b)!important}
+.clip-waveform{position:absolute;inset:5px 8px;display:flex;align-items:center;gap:1px;opacity:.45;pointer-events:none}
+.clip-waveform i{flex:1;min-width:1px;background:#61dcf1;border-radius:2px}
+.timeline-clip.deck-2 .clip-waveform i{background:#ff7598}
+.clip-no-waveform{position:absolute;right:8px;bottom:2px;color:#c0cbd6;font-size:9px;opacity:.8}
+.clip-title{position:relative;z-index:1;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-shadow:0 1px 3px #000}
+.mix-editor-inspector{padding:16px}
+.mix-editor-inspector h3{font-size:16px}
+.mix-editor-inspector h4{font-size:15px}
+.mix-editor-inspector label{grid-template-columns:68px minmax(0,1fr);color:#b5c0d2}
+.mix-editor-inspector input{min-height:35px}
+.mix-editor-inspector .property-type{font-size:10px;color:#d6a0f4}
+.mix-editor-inspector .property-path{padding:9px;background:#0b0f18;border:1px solid #343d4d;border-radius:6px;overflow-wrap:anywhere}
+.mix-editor-point-list{max-height:36%;overflow:auto;padding-bottom:8px;border-bottom:1px solid #343b49;margin-bottom:12px}
+.mix-editor-point-list summary{cursor:pointer;color:#cab3d8;font-weight:700;padding:5px 0}
+.mix-editor-point-list button{display:flex;width:100%;gap:9px;text-align:left;margin:3px 0;padding:4px 7px;min-height:30px}
+.mix-editor-point-list button.selected{border-color:#cc8ef4;background:#392247}
+.mix-editor-point-list time{flex:none;color:#b785d3;font-family:ui-monospace,Consolas,monospace}
+.mix-editor-point-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mix-editor-footer{height:auto;min-height:32px;flex-basis:auto;flex-wrap:wrap;gap:6px 16px;padding-block:6px;color:#b6c0d0}
+@media(max-width:850px),(max-height:620px){.mix-editor-v2{width:100vw;height:100vh;max-height:100vh;border-radius:0}.mix-editor-workspace{min-height:200px}.mix-editor-v2 .mix-editor-toolbar,.mix-editor-v2 .mix-editor-transport{max-height:100px;overflow:auto}.mix-editor-header{min-height:62px;height:62px;flex-basis:62px}.timeline-row{grid-template-columns:135px minmax(480px,1fr)}.timeline-corner{width:135px}.mix-editor-v2 .mix-editor-ruler{margin-left:135px}}

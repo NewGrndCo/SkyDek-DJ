@@ -17,25 +17,33 @@ select:focus, input:focus, button:focus-visible { outline: 2px solid #bc79ff; ou
 .profile-tools label, .general-settings label { display:flex; gap:8px; align-items:center; margin:10px 0; }
 .general-settings select { max-width:100%; min-width:0; }
 .settings-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
-.xbox-art { position:relative; width:min(100%, 510px); margin:0 auto; aspect-ratio:3/2; container-type:inline-size; }
-.xbox-art img { width:100%; height:100%; object-fit:contain; display:block; user-select:none; pointer-events:none; }
-main section.controller-monitor .controller-control { position:absolute; transform:translate(-50%,-50%); z-index:2; }
-main section.controller-monitor .controller-control > button.xbox-glow { position:absolute; left:0; top:0; aspect-ratio:1; height:auto; min-height:0; padding:0; min-width:0; border-radius:50%; border:2px solid transparent; transform:translate(-50%,-50%); background:transparent; box-shadow:none; }
-main section.controller-monitor .controller-control > button.xbox-glow:is(:hover, :focus-visible) { border-color:#d6b8ff; }
-main section.controller-monitor .controller-control > button.xbox-glow.lit { border-color:#eaffbd; background:#b8ff5a30; box-shadow:0 0 14px 5px #b5ff5f, inset 0 0 8px #b5ff5f; }
-main section.controller-monitor .controller-control > button.stick { width:11cqw; }
-main section.controller-monitor .controller-control > span { position:absolute; left:12px; top:-13px; width:max-content; max-width:130px; padding:3px 6px; border:1px solid #465064; border-radius:5px; background:#0c1018e8; color:#d7deeb; font-size:10px; line-height:1.2; pointer-events:none; box-shadow:0 3px 10px #0008; }
-main section.controller-monitor .controller-control > span b { color:#b98cff; }
-main section.controller-monitor .controller-control > span.essential { border-color:#aef35d; color:#f4ffe8; box-shadow:0 0 10px #8fe24a45; }
-main section.controller-monitor .controller-control > span.essential b { color:#baff70; }
-main section.controller-monitor .control-a > span, main section.controller-monitor .control-b > span, main section.controller-monitor .control-y > span, main section.controller-monitor .control-menu > span, main section.controller-monitor .control-r3 > span { left:auto; right:12px; }
-main section.controller-monitor .control-y > span, main section.controller-monitor .control-dpad-up > span { top:-34px; }
-main section.controller-monitor .control-a > span, main section.controller-monitor .control-dpad-down > span { top:16px; }
-main section.controller-monitor .control-x > span, main section.controller-monitor .control-dpad-left > span { left:auto; right:12px; }
-main section.controller-monitor .control-b > span, main section.controller-monitor .control-dpad-right > span { left:12px; right:auto; }
-main section.controller-monitor .control-view > span, main section.controller-monitor .control-menu > span { top:16px; }
-.controller-shoulders { display:flex; justify-content:space-between; gap:8px; margin-top:10px; }
-.controller-shoulders .lit { color:#eaffbd; border-color:#d6ff9b; box-shadow:0 0 13px #b5ff5f; }
+.controller-monitor-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.controller-monitor-heading > button { padding:6px 10px; font-size:10px; white-space:nowrap; }
+.controller-diagram { position:relative; width:min(100%, 840px); margin:8px auto 4px; aspect-ratio:2/1; }
+.controller-image { position:absolute; left:19%; top:8%; width:62%; aspect-ratio:3/2; container-type:inline-size; z-index:2; }
+.controller-image img { width:100%; height:100%; object-fit:contain; display:block; user-select:none; pointer-events:none; }
+main section.controller-monitor .controller-hotspot { appearance:none; -webkit-appearance:none; position:absolute; z-index:3; aspect-ratio:1; height:auto; min-height:0; padding:0; min-width:0; border-radius:50% !important; border:2px solid transparent !important; transform:translate(-50%,-50%); background:transparent !important; box-shadow:none !important; color:transparent; }
+main section.controller-monitor .controller-hotspot:is(:hover, :focus-visible) { border-color:#d6b8ff !important; background:transparent !important; }
+main section.controller-monitor .controller-hotspot.lit { border-color:#eaffbd !important; background:transparent !important; box-shadow:0 0 14px 5px #b5ff5f, inset 0 0 8px #b5ff5f !important; }
+.controller-callout-lines { position:absolute; inset:0; z-index:1; width:100%; height:100%; overflow:visible; pointer-events:none; }
+.controller-callout-lines polyline { fill:none; stroke:#657188; stroke-width:.32; vector-effect:non-scaling-stroke; transition:stroke .14s ease, filter .14s ease; }
+.controller-callout-lines polyline.essential { stroke:#8aa66e; }
+.controller-callout-lines polyline.lit { stroke:#baff70; filter:drop-shadow(0 0 3px #9dff45); }
+.controller-callout { position:absolute; z-index:4; width:18%; min-height:34px; padding:5px 7px; transform:translateY(-50%); display:flex; flex-direction:column; justify-content:center; gap:1px; border:1px solid #465064; border-radius:7px; background:#111722f2; color:#d7deeb; text-align:left; box-shadow:0 4px 13px #0008; }
+.controller-callout.left { left:0; align-items:flex-start; }
+.controller-callout.right { right:0; align-items:flex-end; text-align:right; }
+.controller-callout b { color:#c69cff; font-size:11px; line-height:1; }
+.controller-callout span { max-width:100%; color:#d7deeb; font-size:11px; line-height:1.2; overflow-wrap:anywhere; }
+.controller-callout:is(:hover,:focus-visible) { z-index:5; }
+.controller-callout.essential { border-color:#87b756; }
+.controller-callout.essential b { color:#baff70; }
+.controller-callout.lit { border-color:#c6ff89; background:#172116f2; box-shadow:0 0 13px #9dff4555; }
+.controller-diagram.hide-callouts { width:min(100%, 580px); aspect-ratio:3/2; }
+.controller-diagram.hide-callouts .controller-image { left:0; top:0; width:100%; }
+@media (max-width:760px) {
+  .controller-callout { width:20%; min-height:30px; padding:4px 5px; }
+  .controller-callout span { font-size:9px; }
+}
 .sampler-tools, .sampler-edit { padding:8px; }
 .sampler-edit > label { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
 .sampler-edit select { width:100%; }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
-import { check } from "@tauri-apps/plugin-updater";
+import { checkSkyDekUpdate } from "./updateService";
 import {
   Settings,
   Folder,
@@ -97,6 +97,7 @@ type Snapshot = {
   };
   error: string;
   device: string;
+  mic_status: string;
   sample_rate: number;
   tab: string;
   recording: boolean;
@@ -623,7 +624,7 @@ function App() {
           <button className="analysis-progress" title={s?.analysis.running ? s.analysis.current : (s?.analysis.message || "Analyze duration and estimate BPM for your library")} onClick={() => invoke("analyze_library", {force:false, cancel:s?.analysis.running || false}).catch(e=>setError(String(e)))}>{s?.analysis.running ? `Analyzing ${s.analysis.completed}/${s.analysis.total} · Pause` : "Analyze library"}</button>
         </div>
         <div className="header-right">
-          <button className="update-header-button" title="Check for application updates" onClick={async () => { setUpdateStatus("Checking for updates…"); try { const update = await check(); setUpdateStatus(update ? `Version ${update.version} is available. Open Settings → General to install.` : "SkyDek DJ is up to date."); } catch (e) { setUpdateStatus(`Update check failed: ${String(e)}`); } }}>Check for updates</button>
+          <button className="update-header-button" title="Check for application updates" onClick={async () => { setUpdateStatus("Checking for updates…"); try { const result = await checkSkyDekUpdate(); setUpdateStatus(result.kind === "available" ? `Signed version ${result.update.version} is available. Open Settings → General to install.` : result.kind === "beta" ? "Beta updates use a separate installer." : `SkyDek DJ is up to date (v${result.version}).`); } catch (e) { setUpdateStatus(`Update check failed: ${String(e)}`); } }}>Check for updates</button>
           <button aria-label="Toggle fullscreen" title="Fullscreen (F11)" onClick={() => invoke("toggle_fullscreen").catch(e => setError(String(e)))}>⛶</button>
           <button onClick={() => cmd("shift")}>
             {s?.shift ? "SHIFT" : "NORMAL"}
@@ -1083,6 +1084,7 @@ function App() {
           preferences={s.preferences}
           sensitivity={s.sensitivity}
           device={s.device}
+          micStatus={s.mic_status}
           rate={s.sample_rate}
           command={cmd}
           resetLayout={panelLayout.reset}

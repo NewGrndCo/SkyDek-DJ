@@ -314,6 +314,7 @@ pub enum Cmd {
     FxToggle(usize, u8),
     StopSample(usize),
     Load(usize, Arc<Track>, [Option<f64>; 8], bool),
+    Unload(usize),
     Toggle(usize),
     Cue(usize, bool),
     CueHold(usize, u8),
@@ -502,6 +503,7 @@ pub struct Mixer {
     mic_mute: bool,
     mic_ducking: bool,
     mic_duck_gain: f32,
+    pub last_mic_input: [f32; 2],
     normalize: bool,
     linear: bool,
     rate: u32,
@@ -538,6 +540,7 @@ impl Mixer {
             mic_mute: false,
             mic_ducking: false,
             mic_duck_gain: 1.,
+            last_mic_input: [0., 0.],
             normalize: false,
             linear: false,
             rate,
@@ -807,6 +810,11 @@ impl Mixer {
                     d.reverb.clear();
                 }
             }
+            Cmd::Unload(i) => {
+                if let Some(deck) = self.decks.get_mut(i) {
+                    *deck = Deck::new(self.rate);
+                }
+            }
             Cmd::Toggle(i) => {
                 if self.auto_mix_outgoing.take().is_some() {
                     self.cross_ramp = None;
@@ -1058,8 +1066,9 @@ impl Mixer {
             .as_ref()
             .and_then(|q| q.pop())
             .unwrap_or([0., 0.]);
+        self.last_mic_input = mic;
         let mic_level = mic[0].abs().max(mic[1].abs());
-        let duck_target = if self.mic_ducking && mic_level > 0.025 {
+        let duck_target = if self.mic_ducking && !self.mic_mute && mic_level > 0.025 {
             0.75
         } else {
             1.
@@ -1134,7 +1143,7 @@ pub fn start(
     errors: Arc<std::sync::Mutex<String>>,
     recorder: Arc<crate::recording::Recorder>,
 ) -> Result<(String, u32), String> {
-    start_on_device(commands, views, errors, recorder, None)
+    start_on_device(commands, views, errors, recorder, None, None, Arc::new(std::sync::Mutex::new(String::new())))
 }
 pub fn output_devices() -> Result<Vec<String>, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
@@ -1144,12 +1153,19 @@ pub fn output_devices() -> Result<Vec<String>, String> {
         .map(|d| d.name().map_err(|e| e.to_string()))
         .collect()
 }
+pub fn input_devices() -> Result<Vec<String>, String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    cpal::default_host().input_devices().map_err(|e| e.to_string())?
+        .map(|d| d.name().map_err(|e| e.to_string())).collect()
+}
 pub fn start_on_device(
     commands: Arc<ArrayQueue<Cmd>>,
     views: Arc<ArrayQueue<View>>,
     errors: Arc<std::sync::Mutex<String>>,
     recorder: Arc<crate::recording::Recorder>,
     selected: Option<&str>,
+    mic_selected: Option<&str>,
+    mic_status: Arc<std::sync::Mutex<String>>,
 ) -> Result<(String, u32), String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     let host = cpal::default_host();
@@ -1167,30 +1183,47 @@ pub fn start_on_device(
     let name = device.name().unwrap_or_default();
     let rate = config.sample_rate().0;
     let device_name = name.clone();
+    let mic_name = mic_selected.map(str::to_owned);
     std::thread::spawn(move || {
         let mic_queue = Arc::new(ArrayQueue::new(8192));
         let mixer = Arc::new(std::sync::Mutex::new(Mixer::new(rate)));
         mixer.lock().unwrap().set_mic_queue(mic_queue.clone());
-        let input_stream = cpal::default_host()
-            .default_input_device()
-            .and_then(|input| {
-                let input_config = input.default_input_config().ok()?;
-                Some(match input_config.sample_format() {
-                    cpal::SampleFormat::F32 => {
-                        input_stream::<f32>(&input, &input_config, mic_queue.clone()).ok()?
-                    }
-                    cpal::SampleFormat::I16 => {
-                        input_stream::<i16>(&input, &input_config, mic_queue.clone()).ok()?
-                    }
-                    cpal::SampleFormat::U16 => {
-                        input_stream::<u16>(&input, &input_config, mic_queue.clone()).ok()?
-                    }
-                    _ => return None,
-                })
-            });
-        if let Some(stream) = &input_stream {
-            let _ = stream.play();
-        }
+        std::thread::spawn(move || {
+            use cpal::traits::StreamTrait;
+            loop {
+                let host = cpal::default_host();
+                let input = if let Some(name) = &mic_name {
+                    host.input_devices().ok().and_then(|mut devices| devices.find(|d| d.name().ok().as_deref() == Some(name)))
+                } else { host.default_input_device() };
+                let result: Result<(), String> = input.ok_or_else(|| "Microphone unavailable".to_string()).and_then(|input| {
+                    let config = input.default_input_config().map_err(|e| e.to_string())?;
+                    let (failed, failure) = std::sync::mpsc::sync_channel::<String>(1);
+                    let stream = match config.sample_format() {
+                        cpal::SampleFormat::F32 => input_stream::<f32>(&input, &config, mic_queue.clone(), rate, failed),
+                        cpal::SampleFormat::I16 => input_stream::<i16>(&input, &config, mic_queue.clone(), rate, failed),
+                        cpal::SampleFormat::U16 => input_stream::<u16>(&input, &config, mic_queue.clone(), rate, failed),
+                        _ => return Err("Unsupported microphone format".into()),
+                    }.map_err(|e| e.to_string())?;
+                    stream.play().map_err(|e| e.to_string())?;
+                    *mic_status.lock().unwrap() = format!("Connected: {}", input.name().unwrap_or_default());
+                    let error = loop {
+                        match failure.recv_timeout(std::time::Duration::from_secs(1)) {
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                let present = cpal::default_host().input_devices().ok()
+                                    .is_some_and(|mut devices| devices.any(|d| d.name().ok() == input.name().ok()));
+                                if !present { break Ok("Microphone disconnected".to_string()); }
+                            }
+                            result => break result,
+                        }
+                    };
+                    drop(stream);
+                    while mic_queue.pop().is_some() {}
+                    match error { Ok(e) => Err(e), Err(_) => Err("Microphone stream closed".into()) }
+                });
+                if let Err(error) = result { *mic_status.lock().unwrap() = format!("Microphone unavailable: {error}. Retrying…"); }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
         let mut first = Some(device);
         loop {
             let output = first.take().or_else(|| {
@@ -1258,26 +1291,57 @@ pub fn start_on_device(
     });
     Ok((name, rate))
 }
+struct MicResampler { step: f64, phase: f64, previous: Option<[f32; 2]> }
+fn mic_frame<T: cpal::Sample>(frame: &[T]) -> [f32; 2]
+where f32: cpal::FromSample<T> {
+    if frame.len() == 1 {
+        let sample = frame[0].to_sample::<f32>();
+        return [sample, sample];
+    }
+    let mut sums = [0.0; 2];
+    let mut counts = [0usize; 2];
+    for (channel, sample) in frame.iter().enumerate() {
+        let side = channel % 2;
+        sums[side] += sample.to_sample::<f32>();
+        counts[side] += 1;
+    }
+    [sums[0] / counts[0].max(1) as f32, sums[1] / counts[1].max(1) as f32]
+}
+impl MicResampler {
+    fn new(input_rate: u32, output_rate: u32) -> Self { Self { step: input_rate as f64 / output_rate as f64, phase: 0., previous: None } }
+    fn push(&mut self, next: [f32; 2], mut output: impl FnMut([f32; 2])) {
+        if let Some(previous) = self.previous {
+            while self.phase < 1. {
+                let t = self.phase as f32;
+                output([previous[0] + (next[0]-previous[0])*t, previous[1] + (next[1]-previous[1])*t]);
+                self.phase += self.step;
+            }
+            self.phase -= 1.;
+        }
+        self.previous = Some(next);
+    }
+}
 fn input_stream<T: cpal::SizedSample + cpal::Sample>(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<ArrayQueue<[f32; 2]>>,
+    output_rate: u32,
+    failed: std::sync::mpsc::SyncSender<String>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
     f32: cpal::FromSample<T>,
 {
     use cpal::traits::DeviceTrait;
     let channels = config.channels() as usize;
+    let mut resampler = MicResampler::new(config.sample_rate().0, output_rate);
     device.build_input_stream(
         &config.config(),
         move |data: &[T], _| {
             for frame in data.chunks(channels) {
-                let left = frame.first().map(|x| x.to_sample::<f32>()).unwrap_or(0.);
-                let right = frame.get(1).map(|x| x.to_sample::<f32>()).unwrap_or(left);
-                let _ = queue.push([left, right]);
+                resampler.push(mic_frame(frame), |sample| { if queue.push(sample).is_err() { let _ = queue.pop(); let _ = queue.push(sample); } });
             }
         },
-        move |_| {},
+        move |error| { let _ = failed.try_send(error.to_string()); },
         None,
     )
 }
@@ -1313,7 +1377,7 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
             }
             for frame in data.chunks_mut(channels) {
                 let sample = mixer.frame();
-                recorder.push(sample);
+                recorder.push_with_mic(sample, mixer.last_mic_input);
                 for (channel, output) in frame.iter_mut().enumerate() {
                     let value = match channels {
                         1 => (sample[0] + sample[1]) * 0.5,
@@ -1334,6 +1398,50 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn microphone_channel_mapping_preserves_mono_and_all_input_pairs() {
+        assert_eq!(mic_frame(&[0.25f32]), [0.25, 0.25]);
+        assert_eq!(mic_frame(&[0.2f32, 0.8]), [0.2, 0.8]);
+        assert_eq!(mic_frame(&[0.0f32, 0.2, 1.0, 0.8]), [0.5, 0.5]);
+    }
+    #[test]
+    fn microphone_resamples_matching_and_mismatched_rates() {
+        for (input_rate, output_rate) in [(48_000, 48_000), (44_100, 48_000)] {
+            let mut converter = MicResampler::new(input_rate, output_rate);
+            let mut output = Vec::new();
+            for i in 0..input_rate {
+                converter.push([i as f32 / input_rate as f32, -0.5], |sample| output.push(sample));
+            }
+            assert!((output.len() as i64 - output_rate as i64).abs() <= 2);
+            assert!(output.iter().all(|sample| sample[0].is_finite() && (sample[1] + 0.5).abs() < 1e-6));
+            assert!(output.windows(2).all(|pair| pair[0][0] <= pair[1][0]));
+        }
+    }
+    #[test]
+    fn microphone_queue_stays_bounded_on_overflow_and_mixer_handles_underrun() {
+        let queue = Arc::new(ArrayQueue::new(8));
+        let mut converter = MicResampler::new(44_100, 48_000);
+        for i in 0..100 {
+            converter.push([i as f32, i as f32], |sample| {
+                if queue.push(sample).is_err() { let _ = queue.pop(); let _ = queue.push(sample); }
+            });
+        }
+        assert_eq!(queue.len(), 8);
+        let mut mixer = Mixer::new(48_000);
+        mixer.set_mic_queue(queue);
+        for _ in 0..32 { assert!(mixer.frame().iter().all(|value| value.is_finite())); }
+    }
+    #[test]
+    fn muted_microphone_never_ducks_music() {
+        let queue = Arc::new(ArrayQueue::new(8));
+        queue.push([0.8, 0.8]).unwrap();
+        let mut mixer = Mixer::new(48_000);
+        mixer.set_mic_queue(queue);
+        mixer.apply(Cmd::MicDucking(true));
+        mixer.apply(Cmd::MicMute(true));
+        mixer.frame();
+        assert_eq!(mixer.mic_duck_gain, 1.0);
+    }
     #[test]
     fn waveform_drags_fill_three_cues_then_preserve_them() {
         let mut mixer = Mixer::new(48000);

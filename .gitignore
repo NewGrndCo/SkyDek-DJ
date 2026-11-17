@@ -6,3 +6,4 @@ encoder-helper/target/
 encoder-helper/vendor/
 src-tauri/resources/encoder/*.exe
 *.tsbuildinfo
+src-tauri/project-icons/

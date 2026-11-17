@@ -23,6 +23,17 @@ pub struct Frame {
     pub master: f32,
     pub sampler_volume: f32,
     pub samples: Vec<String>,
+    #[serde(default)]
+    pub mic: Option<MicState>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MicState {
+    pub volume: f32,
+    pub mute: bool,
+    pub ducking: bool,
+}
+impl Default for MicState {
+    fn default() -> Self { Self { volume: 0.8, mute: false, ducking: false } }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -30,11 +41,40 @@ pub struct Event {
     pub label: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
+pub struct SampleCommand {
+    pub seconds: f64,
+    pub path: String,
+    pub action: String,
+    pub mode: crate::sampler::PlayMode,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct EffectCommand {
+    pub seconds: f64,
+    pub deck: usize,
+    pub effect: u8,
+    pub active: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MicCommand {
+    pub seconds: f64,
+    pub state: MicState,
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MixLog {
     pub version: u8,
+    #[serde(default)]
+    pub capture_revision: u8,
     pub audio_file: String,
     pub frames: Vec<Frame>,
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub sample_commands: Vec<SampleCommand>,
+    #[serde(default)]
+    pub effect_commands: Vec<EffectCommand>,
+    #[serde(default)]
+    pub mic_file: Option<String>,
+    #[serde(default)]
+    pub mic_commands: Vec<MicCommand>,
 }
 #[derive(Default)]
 pub struct Manager {
@@ -47,13 +87,39 @@ impl Manager {
         self.recent.clear();
         self.active = Some(MixLog {
             version: 1,
+            capture_revision: 1,
             audio_file: path,
             frames: Vec::new(),
             events: vec![Event {
                 seconds: 0.,
                 label: "Recording started".into(),
             }],
+            sample_commands: Vec::new(),
+            effect_commands: Vec::new(),
+            mic_file: None,
+            mic_commands: Vec::new(),
         });
+    }
+    pub fn record_sample(&mut self, seconds: f64, path: String, action: &str, mode: crate::sampler::PlayMode) {
+        if let Some(log) = self.active.as_mut() {
+            if seconds.is_finite() && seconds >= 0. && log.sample_commands.len() < 500_000 {
+                log.sample_commands.push(SampleCommand { seconds, path, action: action.into(), mode });
+            }
+        }
+    }
+    pub fn record_effect(&mut self, seconds: f64, deck: usize, effect: u8, active: bool) {
+        if let Some(log) = self.active.as_mut() {
+            if seconds.is_finite() && seconds >= 0. && log.effect_commands.len() < 500_000 {
+                log.effect_commands.push(EffectCommand { seconds, deck, effect, active });
+            }
+        }
+    }
+    pub fn record_mic(&mut self, seconds: f64, state: MicState) {
+        if let Some(log) = self.active.as_mut() {
+            if seconds.is_finite() && seconds >= 0. && log.mic_commands.len() < 500_000 {
+                log.mic_commands.push(MicCommand { seconds, state });
+            }
+        }
     }
     pub fn capture(
         &mut self,
@@ -61,6 +127,7 @@ impl Manager {
         view: &View,
         paths: &[Option<String>; 2],
         samples: &[Option<String>],
+        mic: MicState,
     ) {
         let Some(log) = self.active.as_mut() else {
             return;
@@ -101,6 +168,7 @@ impl Manager {
                         .flatten()
                 })
                 .collect(),
+            mic: Some(mic),
         };
         let previous = log.frames.last();
         let mut labels = Vec::new();
@@ -189,16 +257,35 @@ fn effect_name(effect: u8) -> &'static str {
 mod tests {
     use super::*;
     #[test]
+    fn precise_commands_preserve_rapid_changes_and_legacy_logs_still_load() {
+        let mut manager = Manager::default();
+        manager.start("mix.wav".into());
+        manager.record_sample(0.01, "horn.wav".into(), "press", crate::sampler::PlayMode::Restart);
+        manager.record_sample(0.04, "horn.wav".into(), "press", crate::sampler::PlayMode::Restart);
+        manager.record_effect(0.03, 0, 4, true);
+        manager.record_effect(0.06, 0, 4, false);
+        let log = manager.active.as_ref().unwrap();
+        assert_eq!(log.sample_commands.len(), 2);
+        assert_eq!(log.effect_commands.len(), 2);
+        assert_eq!(log.sample_commands[1].seconds, 0.04);
+        let mut legacy = serde_json::to_value(log).unwrap();
+        for field in ["sample_commands", "effect_commands", "mic_commands", "mic_file", "capture_revision"] { legacy.as_object_mut().unwrap().remove(field); }
+        let restored: MixLog = serde_json::from_value(legacy).unwrap();
+        assert!(restored.sample_commands.is_empty());
+        assert!(restored.mic_file.is_none());
+        assert_eq!(restored.capture_revision, 0);
+    }
+    #[test]
     fn captures_track_and_sample_changes() {
         let mut manager = Manager::default();
         manager.start("mix.wav".into());
         let mut view = View::default();
-        manager.capture(0., &view, &[Some("song.wav".into()), None], &vec![None; 48]);
+        manager.capture(0., &view, &[Some("song.wav".into()), None], &vec![None; 48], MicState::default());
         view.decks[0].playing = true;
         view.sampler_voices[47] = 1;
         let mut samples = vec![None; 48];
         samples[47] = Some("airhorn.wav".into());
-        manager.capture(0.2, &view, &[Some("song.wav".into()), None], &samples);
+        manager.capture(0.2, &view, &[Some("song.wav".into()), None], &samples, MicState::default());
         assert_eq!(manager.active.as_ref().unwrap().frames.len(), 2);
         assert!(manager.recent.iter().any(|e| e.label.contains("airhorn")));
     }

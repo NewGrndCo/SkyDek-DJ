@@ -202,9 +202,12 @@ pub struct Recorder {
     pub overflow: AtomicBool,
     pub frames: AtomicU64,
     pub queue: ArrayQueue<[f32; 2]>,
+    mic_queue: ArrayQueue<[f32; 2]>,
+    stem_active: AtomicBool,
     pushing: AtomicUsize,
     writer: Mutex<Option<std::thread::JoinHandle<Result<(), String>>>>,
     pub path: Mutex<String>,
+    pub mic_path: Mutex<String>,
 }
 impl Recorder {
     pub fn new() -> Arc<Self> {
@@ -213,9 +216,12 @@ impl Recorder {
             overflow: AtomicBool::new(false),
             frames: AtomicU64::new(0),
             queue: ArrayQueue::new(48000 * 5),
+            mic_queue: ArrayQueue::new(48000 * 5),
+            stem_active: AtomicBool::new(false),
             pushing: AtomicUsize::new(0),
             writer: Mutex::new(None),
             path: Mutex::new(String::new()),
+            mic_path: Mutex::new(String::new()),
         })
     }
     /// True until stop joins the writer, including after overflow or a write error.
@@ -225,6 +231,9 @@ impl Recorder {
     }
 
     pub fn push(&self, s: [f32; 2]) {
+        self.push_with_mic(s, [0., 0.]);
+    }
+    pub fn push_with_mic(&self, s: [f32; 2], mic: [f32; 2]) {
         if self.active.load(Ordering::Relaxed) {
             // Register an in-flight producer so stop cannot finalize between
             // the active check and the queue push. No locks or allocation here.
@@ -237,6 +246,10 @@ impl Recorder {
                 self.overflow.store(true, Ordering::Relaxed);
                 self.active.store(false, Ordering::SeqCst);
             } else {
+                if self.stem_active.load(Ordering::Relaxed) && self.mic_queue.push(mic).is_err() {
+                    self.overflow.store(true, Ordering::Relaxed);
+                    self.active.store(false, Ordering::SeqCst);
+                }
                 self.frames.fetch_add(1, Ordering::Relaxed);
             }
             self.pushing.fetch_sub(1, Ordering::SeqCst);
@@ -245,19 +258,36 @@ impl Recorder {
     /// Start stereo recording: .mp3 selects 320 kbps MP3; .wav (or no extension)
     /// selects the original 32-bit float WAV output. Extensions ignore case.
     pub fn start(self: &Arc<Self>, path: PathBuf, rate: u32) -> Result<(), String> {
+        self.start_inner(path, rate, false)
+    }
+    pub fn start_with_mic_stem(self: &Arc<Self>, path: PathBuf, rate: u32) -> Result<(), String> {
+        self.start_inner(path, rate, true)
+    }
+    fn start_inner(self: &Arc<Self>, path: PathBuf, rate: u32, capture_mic: bool) -> Result<(), String> {
         let mut handle = self.writer.lock().unwrap();
         if handle.is_some() {
             return Err("Finish the current recording first".into());
         }
         let mut writer = RecordingWriter::create(&path, rate)?;
+        let stem_path = capture_mic.then(|| path.with_extension("mic.wav"));
+        let mut mic_writer = if let Some(mic_path) = &stem_path {
+            match RecordingWriter::create(mic_path, rate) {
+                Ok(writer) => Some(writer),
+                Err(error) => { drop(writer); let _ = std::fs::remove_file(&path); return Err(format!("Could not create microphone stem: {error}")); }
+            }
+        } else { None };
         while self.queue.pop().is_some() {}
+        while self.mic_queue.pop().is_some() {}
         self.frames.store(0, Ordering::Relaxed);
         self.overflow.store(false, Ordering::Relaxed);
         *self.path.lock().unwrap() = path.to_string_lossy().into_owned();
+        *self.mic_path.lock().unwrap() = stem_path.map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+        self.stem_active.store(capture_mic, Ordering::Release);
         self.active.store(true, Ordering::Release);
         let r = self.clone();
         *handle = Some(std::thread::spawn(move || {
             let mut samples = Vec::with_capacity(WRITE_FRAMES * 2);
+            let mut mic_samples = Vec::with_capacity(WRITE_FRAMES * 2);
             loop {
                 // Observe shutdown before draining, then wait for any producer
                 // that already passed its active check. Accepted tail frames
@@ -270,10 +300,33 @@ impl Recorder {
                     samples.extend_from_slice(&frame);
                 }
                 if !samples.is_empty() {
+                    mic_samples.clear();
+                    if mic_writer.is_some() {
+                        for _ in 0..samples.len() / 2 {
+                            let frame = loop {
+                                if let Some(frame) = r.mic_queue.pop() { break frame; }
+                                if !r.active.load(Ordering::SeqCst) && r.pushing.load(Ordering::SeqCst) == 0 {
+                                    r.overflow.store(true, Ordering::Relaxed);
+                                    break [0., 0.];
+                                }
+                                std::thread::yield_now();
+                            };
+                            mic_samples.extend_from_slice(&frame);
+                        }
+                    }
                     if let Err(e) = writer.write(&samples) {
                         r.active.store(false, Ordering::SeqCst);
                         let _ = writer.finalize();
+                        if let Some(writer) = mic_writer { let _ = writer.finalize(); }
                         return Err(e);
+                    }
+                    if let Some(mic_output) = mic_writer.as_mut() {
+                        if let Err(error) = mic_output.write(&mic_samples) {
+                            r.active.store(false, Ordering::SeqCst);
+                            let _ = writer.finalize();
+                            let _ = mic_writer.take().unwrap().finalize();
+                            return Err(error);
+                        }
                     }
                     continue;
                 }
@@ -283,6 +336,7 @@ impl Recorder {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             writer.finalize()?;
+            if let Some(writer) = mic_writer { writer.finalize()?; }
             if r.overflow.load(Ordering::Relaxed) {
                 Err("Recording stopped: disk writer fell behind; file was finalized".into())
             } else {
@@ -296,11 +350,11 @@ impl Recorder {
         // the recorder while the previous file is still being finalized.
         let mut handle = self.writer.lock().unwrap();
         self.active.store(false, Ordering::SeqCst);
-        if let Some(h) = handle.take() {
-            h.join()
-                .map_err(|_| "Recording writer failed".to_string())??
-        }
-        Ok(())
+        let result = if let Some(h) = handle.take() {
+            h.join().map_err(|_| "Recording writer failed".to_string()).and_then(|outcome| outcome)
+        } else { Ok(()) };
+        self.stem_active.store(false, Ordering::Release);
+        result
     }
 }
 
@@ -335,6 +389,23 @@ mod tests {
     fn tone(frame: usize, rate: u32) -> [f32; 2] {
         let phase = frame as f32 * std::f32::consts::TAU / rate as f32;
         [(phase * 440.).sin() * 0.4, (phase * 880.).sin() * 0.2]
+    }
+    #[test]
+    fn microphone_stem_has_one_frame_for_each_master_frame() {
+        let path = TestFile::new("wav");
+        let stem = path.0.with_extension("mic.wav");
+        let recorder = Recorder::new();
+        recorder.start_with_mic_stem(path.0.clone(), 48_000).unwrap();
+        for index in 0..1000 {
+            recorder.push_with_mic([0.1, -0.1], [index as f32 / 1000., -(index as f32 / 1000.)]);
+        }
+        recorder.stop().unwrap();
+        let master = hound::WavReader::open(&path.0).unwrap();
+        let mic: Vec<f32> = hound::WavReader::open(&stem).unwrap().samples::<f32>().map(Result::unwrap).collect();
+        assert_eq!(master.duration(), 1000);
+        assert_eq!(mic.len(), 2000);
+        assert!((mic[1000] - 0.5).abs() < 0.001);
+        let _ = std::fs::remove_file(stem);
     }
 
     fn decode_mp3(path: &Path, gapless: bool) -> (u32, Vec<f32>, Option<u64>) {

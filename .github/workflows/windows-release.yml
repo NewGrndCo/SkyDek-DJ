@@ -38,9 +38,11 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: SkyDek DJ ${{ github.ref_name }}
           releaseBody: |
-            SkyDek DJ adds safe double-click deck loading, dynamic Xbox mapping labels, and the latest beta-tested Mix Editor and workflow improvements.
+            SkyDek DJ 0.10.20 adds the new official application and project icons, Mix Editor reliability and keyboard improvements, microphone stem capture for new recordings, controller callouts, and audio and Auto DJ fixes.
 
             Existing installations can install this signed update from Check for updates.
+
+            Physical microphone, controller, display scaling, and long-mix performance checks remain recommended before a live set.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
