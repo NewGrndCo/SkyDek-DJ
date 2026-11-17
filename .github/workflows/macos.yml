@@ -56,7 +56,12 @@ jobs:
           args: --bundles dmg --target universal-apple-darwin
       - name: Verify bundled Mac resources and architecture
         run: |
-          app="$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          archive="$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
+          test -n "$archive"
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf "$verify_dir"' EXIT
+          tar -xzf "$archive" -C "$verify_dir"
+          app="$(find "$verify_dir" -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$app"
           test -f "$app/Contents/Resources/resources/encoder/skydek-mp3-encoder"
           test -f "$app/Contents/Resources/project.icns"
