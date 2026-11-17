@@ -50,6 +50,10 @@ jobs:
         with:
           tagName: ${{ inputs.release_tag }}
           releaseName: ${{ inputs.release_tag && format('SkyDek DJ {0}', inputs.release_tag) || '' }}
+          releaseBody: |
+            SkyDek DJ 0.10.21 includes installers for Windows and macOS, with the same DJ interface, controller mapping, recording, Mix Editor, and in-app update feed.
+
+            Choose the Windows installer or the universal macOS DMG below. The Mac build uses ad-hoc Apple code signing, so macOS may ask you to allow the app in Privacy & Security on first launch.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
@@ -57,11 +61,11 @@ jobs:
       - name: Verify bundled Mac resources and architecture
         run: |
           set -x
-          archive="$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
-          test -n "$archive"
+          dmg="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg"
           verify_dir="$(mktemp -d)"
-          trap 'rm -rf "$verify_dir"' EXIT
-          tar -xzf "$archive" -C "$verify_dir"
+          hdiutil attach -readonly -nobrowse -mountpoint "$verify_dir" "$dmg"
+          trap 'hdiutil detach "$verify_dir"; rmdir "$verify_dir"' EXIT
           app="$(find "$verify_dir" -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$app"
           test -f "$app/Contents/Resources/resources/encoder/skydek-mp3-encoder"
