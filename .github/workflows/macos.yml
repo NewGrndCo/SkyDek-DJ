@@ -59,22 +59,7 @@ jobs:
           uploadUpdaterJson: true
           args: --bundles dmg --target universal-apple-darwin
       - name: Verify bundled Mac resources and architecture
-        run: |
-          set -x
-          dmg="$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
-          test -n "$dmg"
-          verify_dir="$(mktemp -d)"
-          hdiutil attach -readonly -nobrowse -mountpoint "$verify_dir" "$dmg"
-          trap 'hdiutil detach "$verify_dir"; rmdir "$verify_dir"' EXIT
-          app="$(find "$verify_dir" -maxdepth 1 -name '*.app' -print -quit)"
-          test -n "$app"
-          test -f "$app/Contents/Resources/resources/encoder/skydek-mp3-encoder"
-          test -f "$app/Contents/Resources/project.icns"
-          test -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist")"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeIconFile' "$app/Contents/Info.plist")" = "project.icns"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/skydek-dj"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/Resources/resources/encoder/skydek-mp3-encoder"
-          codesign --verify --deep "$app"
+        run: bash scripts/verify-macos-dmg.sh src-tauri/target/universal-apple-darwin/release/bundle/dmg
       - name: Retain Mac package for build inspection
         if: always()
         uses: actions/upload-artifact@v4
