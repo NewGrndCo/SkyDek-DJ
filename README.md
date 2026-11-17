@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="0467314A-AEDC-4A2D-9B23-137B72A4B40D.png" alt="SkyDek DJ — official brand logo" width="100%">
+</p>
+
 # SkyDek DJ
 
 ## Platform support
