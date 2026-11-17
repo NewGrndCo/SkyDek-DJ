@@ -4,17 +4,50 @@
 
 # SkyDek DJ
 
-## Platform support
+**Make every transition yours.**
 
-SkyDek DJ supports Windows and macOS. The [latest release](https://github.com/NewGrndCo/SkyDek-DJ/releases/latest) provides a Windows NSIS installer and a universal macOS DMG for Apple Silicon and Intel Macs. The DMG presents the app icon for dragging into Applications. The Mac build is ad-hoc signed; first launch may require allowing the app in macOS Privacy & Security. Apple Developer ID notarization is not yet configured.
+SkyDek DJ is an independent desktop DJ workstation developed by New Ground Media, part of New Ground Enterprise. Built for creative freedom and accessibility, it brings dual-deck mixing, customizable controller mapping, live sampling, audio effects, music library management and mix recording together in a standalone application for Windows and macOS.
 
-Landing pages can request the [latest GitHub release metadata](https://api.github.com/repos/NewGrndCo/SkyDek-DJ/releases/latest) and select the `.exe` or `.dmg` asset by file extension. This keeps platform download buttons on the newest release without embedding a version number.
+[Download SkyDek DJ](https://github.com/NewGrndCo/SkyDek-DJ/releases/latest) · [Release notes](https://github.com/NewGrndCo/SkyDek-DJ/releases) · [Report an issue](https://github.com/NewGrndCo/SkyDek-DJ/issues)
 
-SkyDek DJ is a standalone desktop DJ workstation by New Ground Media. It supports Windows and macOS and does not require VirtualDJ or loopMIDI.
+## The SkyDek story
 
-## Current Windows release
+SkyDek began as an idea for browser-based DJing with cloud-hosted music and preloaded sound effects. In November 2026, an experiment with an Xbox controller evolved into an independent desktop DJ application, designed to make mixing accessible without requiring VirtualDJ or loopMIDI.
 
-The current official release is **0.10.21** for Windows and macOS. Existing official installations can use **Check for updates** after the signed updater artifacts for their platform are published. See [0.10.21 update notes](docs/UPDATE-0.10.21.md).
+## Key features
+
+- Dual-deck mixing, crossfader, cue points and interactive waveforms.
+- WAV/MP3 music library with background BPM analysis.
+- Xbox controller mapping with customizable Normal and Shift profiles.
+- Sixteen-pad live sampler with multiple playback modes.
+- Built-in audio effects, tempo and level controls.
+- Master mix recording in WAV or MP3.
+- Mix Editor, .dek projects, customizable workspace and in-app update feed.
+
+## Hardware compatibility
+
+Xbox controller and mouse/keyboard workflows are documented below. The Pioneer DDJ-SB3 has also worked in founder testing; full control-by-control and cross-platform compatibility is not yet certified.
+
+## Download and platform support
+
+| Platform | Installer |
+| --- | --- |
+| Windows (x64) | NSIS setup (.exe) |
+| macOS (Apple Silicon and Intel) | Universal DMG |
+
+The current official release is **v0.10.21**. [Download the latest release](https://github.com/NewGrndCo/SkyDek-DJ/releases/latest) or read the [0.10.21 update notes](docs/UPDATE-0.10.21.md).
+
+On macOS, drag the app into Applications. The Mac build uses ad-hoc signing; Apple Developer ID notarization is not yet configured, and first launch may require approval in Privacy & Security. Physical Mac hardware testing remains outstanding.
+
+Existing official installations can use **Check for updates** after signed updater artifacts for their platform are published. Website integrations can use the [latest GitHub release metadata](https://api.github.com/repos/NewGrndCo/SkyDek-DJ/releases/latest) to select the .exe or .dmg asset dynamically.
+
+## Licensing
+
+SkyDek DJ is independently developed. Public repository access does not imply an open-source license for the proprietary core application. See [source code license](SOURCE-CODE-LICENSE.md).
+
+---
+
+## Technical documentation
 
 ## Development and verification
 
