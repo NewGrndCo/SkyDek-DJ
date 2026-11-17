@@ -22,6 +22,8 @@ pub struct Preferences {
     pub effect_toggle: bool,
     pub sampler_volume: f64,
     pub audio_device: Option<String>,
+    pub headphone_device: Option<String>,
+    pub headphone_volume: f64,
     pub mic_device: Option<String>,
     pub mic_volume: f64,
     pub mic_mute: bool,
@@ -52,6 +54,8 @@ impl Default for Preferences {
             effect_toggle: false,
             sampler_volume: 0.8,
             audio_device: None,
+            headphone_device: None,
+            headphone_volume: 0.8,
             mic_device: None,
             mic_volume: 0.8,
             mic_mute: false,
@@ -92,6 +96,9 @@ impl Preferences {
         if !self.mic_volume.is_finite() || !(0.0..=1.0).contains(&self.mic_volume) {
             return Err("Microphone volume must be between 0 and 1".into());
         }
+        if !self.headphone_volume.is_finite() || !(0.0..=1.0).contains(&self.headphone_volume) {
+            return Err("Headphone volume must be between 0 and 1".into());
+        }
         Ok(())
     }
 }
@@ -104,6 +111,8 @@ mod tests {
         assert_eq!(p.cue_seconds, 3.);
         assert!(!p.library_monitor);
         assert_eq!(p.library_scan_minutes, 15);
+        assert_eq!(p.headphone_device, None);
+        assert_eq!(p.headphone_volume, 0.8);
         p.cue_seconds = 0.3;
         p.validate().unwrap();
         p.crossfade_seconds = f64::NAN;

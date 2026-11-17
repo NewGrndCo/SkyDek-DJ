@@ -334,6 +334,8 @@ pub enum Cmd {
     MicVolume(f32),
     MicMute(bool),
     MicDucking(bool),
+    HeadphoneTarget(usize),
+    HeadphoneVolume(f32),
     Normalize(bool),
     Hot(usize, usize, bool),
     Fx(usize, u8),
@@ -503,6 +505,10 @@ pub struct Mixer {
     mic_mute: bool,
     mic_ducking: bool,
     mic_duck_gain: f32,
+    headphone_target: usize,
+    headphone_volume: f32,
+    headphone_queue: Option<Arc<ArrayQueue<[f32; 2]>>>,
+    pub last_headphone_output: [f32; 2],
     pub last_mic_input: [f32; 2],
     normalize: bool,
     linear: bool,
@@ -540,6 +546,10 @@ impl Mixer {
             mic_mute: false,
             mic_ducking: false,
             mic_duck_gain: 1.,
+            headphone_target: 0,
+            headphone_volume: 0.8,
+            headphone_queue: None,
+            last_headphone_output: [0., 0.],
             last_mic_input: [0., 0.],
             normalize: false,
             linear: false,
@@ -550,6 +560,9 @@ impl Mixer {
     }
     pub fn set_mic_queue(&mut self, queue: Arc<ArrayQueue<[f32; 2]>>) {
         self.mic_queue = Some(queue);
+    }
+    pub fn set_headphone_queue(&mut self, queue: Arc<ArrayQueue<[f32; 2]>>) {
+        self.headphone_queue = Some(queue);
     }
     pub fn apply(&mut self, c: Cmd) {
         match c {
@@ -760,6 +773,8 @@ impl Mixer {
             Cmd::MicVolume(x) => self.mic_volume = x.clamp(0., 1.),
             Cmd::MicMute(x) => self.mic_mute = x,
             Cmd::MicDucking(x) => self.mic_ducking = x,
+            Cmd::HeadphoneTarget(i) => self.headphone_target = i.min(1),
+            Cmd::HeadphoneVolume(x) => self.headphone_volume = x.clamp(0., 1.),
             Cmd::Normalize(enabled) => self.normalize = enabled,
             Cmd::Linear(x) => self.linear = x,
             Cmd::Sampler(i, t) => {
@@ -928,6 +943,7 @@ impl Mixer {
             }
         }
         let mut out = [0.; 2];
+        let mut cue = [0.; 2];
         let gains = cross_gains(self.cross, self.linear);
         let dt = 1. / self.rate as f64;
         for (i, d) in self.decks.iter_mut().enumerate() {
@@ -1027,6 +1043,9 @@ impl Mixer {
                 }
                 d.delay_at = (d.delay_at + 1) % d.delay.len();
             }
+            if i == self.headphone_target {
+                cue = s;
+            }
             d.peak = (d.peak * 0.9995).max(s[0].abs().max(s[1].abs()) * d.volume);
             for c in 0..2 {
                 out[c] += s[c] * d.volume * gains[i];
@@ -1067,6 +1086,7 @@ impl Mixer {
             .and_then(|q| q.pop())
             .unwrap_or([0., 0.]);
         self.last_mic_input = mic;
+        self.last_headphone_output = cue.map(|sample| (sample * self.headphone_volume).clamp(-1., 1.));
         let mic_level = mic[0].abs().max(mic[1].abs());
         let duck_target = if self.mic_ducking && !self.mic_mute && mic_level > 0.025 {
             0.75
@@ -1143,7 +1163,11 @@ pub fn start(
     errors: Arc<std::sync::Mutex<String>>,
     recorder: Arc<crate::recording::Recorder>,
 ) -> Result<(String, u32), String> {
-    start_on_device(commands, views, errors, recorder, None, None, Arc::new(std::sync::Mutex::new(String::new())))
+    start_on_device(commands, views, errors, recorder, AudioRouting {
+        output: None, mic: None, headphones: None,
+        mic_status: Arc::new(std::sync::Mutex::new(String::new())),
+        headphone_status: Arc::new(std::sync::Mutex::new(String::new())),
+    })
 }
 pub fn output_devices() -> Result<Vec<String>, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
@@ -1158,16 +1182,22 @@ pub fn input_devices() -> Result<Vec<String>, String> {
     cpal::default_host().input_devices().map_err(|e| e.to_string())?
         .map(|d| d.name().map_err(|e| e.to_string())).collect()
 }
+pub struct AudioRouting<'a> {
+    pub output: Option<&'a str>,
+    pub mic: Option<&'a str>,
+    pub headphones: Option<&'a str>,
+    pub mic_status: Arc<std::sync::Mutex<String>>,
+    pub headphone_status: Arc<std::sync::Mutex<String>>,
+}
 pub fn start_on_device(
     commands: Arc<ArrayQueue<Cmd>>,
     views: Arc<ArrayQueue<View>>,
     errors: Arc<std::sync::Mutex<String>>,
     recorder: Arc<crate::recording::Recorder>,
-    selected: Option<&str>,
-    mic_selected: Option<&str>,
-    mic_status: Arc<std::sync::Mutex<String>>,
+    routing: AudioRouting<'_>,
 ) -> Result<(String, u32), String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    let AudioRouting { output: selected, mic: mic_selected, headphones: headphone_selected, mic_status, headphone_status } = routing;
     let host = cpal::default_host();
     let device = if let Some(name) = selected {
         host.output_devices()
@@ -1184,10 +1214,63 @@ pub fn start_on_device(
     let rate = config.sample_rate().0;
     let device_name = name.clone();
     let mic_name = mic_selected.map(str::to_owned);
+    let headphone_name = headphone_selected.map(str::to_owned);
     std::thread::spawn(move || {
         let mic_queue = Arc::new(ArrayQueue::new(8192));
+        let headphone_queue = Arc::new(ArrayQueue::new(8192));
         let mixer = Arc::new(std::sync::Mutex::new(Mixer::new(rate)));
         mixer.lock().unwrap().set_mic_queue(mic_queue.clone());
+        if headphone_name.as_deref().is_some_and(|headphone| headphone != device_name) {
+            mixer.lock().unwrap().set_headphone_queue(headphone_queue.clone());
+        }
+        if let Some(headphone_name) = headphone_name {
+            if headphone_name == device_name {
+                *headphone_status.lock().unwrap() = "Choose a separate output for headphone cueing".into();
+            } else {
+                std::thread::spawn(move || {
+                    loop {
+                        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+                        let output = cpal::default_host().output_devices().ok()
+                            .and_then(|mut devices| devices.find(|d| d.name().ok().as_deref() == Some(headphone_name.as_str())));
+                        let result: Result<(), String> = output.ok_or_else(|| format!("Headphone output '{headphone_name}' is unavailable"))
+                            .and_then(|output| {
+                                let config = output.default_output_config().map_err(|e| e.to_string())?;
+                                let (failed, failure) = std::sync::mpsc::sync_channel(1);
+                                let stream = match config.sample_format() {
+                                    cpal::SampleFormat::F32 => cue_output_stream::<f32>(&output, &config, rate, &headphone_queue, failed),
+                                    cpal::SampleFormat::I16 => cue_output_stream::<i16>(&output, &config, rate, &headphone_queue, failed),
+                                    cpal::SampleFormat::U16 => cue_output_stream::<u16>(&output, &config, rate, &headphone_queue, failed),
+                                    cpal::SampleFormat::I32 => cue_output_stream::<i32>(&output, &config, rate, &headphone_queue, failed),
+                                    cpal::SampleFormat::F64 => cue_output_stream::<f64>(&output, &config, rate, &headphone_queue, failed),
+                                    _ => return Err("Unsupported headphone output format".into()),
+                                }.map_err(|e| e.to_string())?;
+                                stream.play().map_err(|e| e.to_string())?;
+                                *headphone_status.lock().unwrap() = format!("Connected: {headphone_name}");
+                                let error = loop {
+                                    match failure.recv_timeout(std::time::Duration::from_secs(1)) {
+                                        Ok(error) => break error,
+                                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break "Headphone stream closed".into(),
+                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                            let present = cpal::default_host().output_devices().ok()
+                                                .is_some_and(|mut devices| devices.any(|d| d.name().ok().as_deref() == Some(headphone_name.as_str())));
+                                            if !present { break "Headphone output disconnected".into(); }
+                                        }
+                                    }
+                                };
+                                drop(stream);
+                                Err(error)
+                            });
+                        if let Err(error) = result {
+                            *headphone_status.lock().unwrap() = format!("Headphone output unavailable: {error}. Retrying…");
+                        }
+                        while headphone_queue.pop().is_some() {}
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    }
+                });
+            }
+        } else {
+            *headphone_status.lock().unwrap() = "Off — select a separate output in Audio settings".into();
+        }
         std::thread::spawn(move || {
             use cpal::traits::StreamTrait;
             loop {
@@ -1345,6 +1428,64 @@ where
         None,
     )
 }
+
+struct CueReader {
+    step: f64,
+    phase: f64,
+    previous: [f32; 2],
+    next: [f32; 2],
+    primed: bool,
+}
+impl CueReader {
+    fn new(source_rate: u32, output_rate: u32) -> Self {
+        Self { step: source_rate as f64 / output_rate as f64, phase: 0., previous: [0.; 2], next: [0.; 2], primed: false }
+    }
+    fn frame(&mut self, queue: &ArrayQueue<[f32; 2]>) -> [f32; 2] {
+        if !self.primed {
+            self.previous = queue.pop().unwrap_or([0.; 2]);
+            self.next = queue.pop().unwrap_or([0.; 2]);
+            self.primed = true;
+        }
+        let t = self.phase as f32;
+        let output = [
+            self.previous[0] + (self.next[0] - self.previous[0]) * t,
+            self.previous[1] + (self.next[1] - self.previous[1]) * t,
+        ];
+        self.phase += self.step;
+        while self.phase >= 1. {
+            self.previous = self.next;
+            self.next = queue.pop().unwrap_or([0.; 2]);
+            self.phase -= 1.;
+        }
+        output
+    }
+}
+fn cue_output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    source_rate: u32,
+    queue: &Arc<ArrayQueue<[f32; 2]>>,
+    failed: std::sync::mpsc::SyncSender<String>,
+) -> Result<cpal::Stream, cpal::BuildStreamError> {
+    use cpal::traits::DeviceTrait;
+    let channels = config.channels() as usize;
+    let mut reader = CueReader::new(source_rate, config.sample_rate().0);
+    let queue = queue.clone();
+    device.build_output_stream(
+        &config.config(),
+        move |data: &mut [T], _| {
+            for frame in data.chunks_mut(channels) {
+                let sample = reader.frame(&queue);
+                for (channel, output) in frame.iter_mut().enumerate() {
+                    let value = if channels == 1 { (sample[0] + sample[1]) * 0.5 } else { sample.get(channel).copied().unwrap_or(0.) };
+                    *output = T::from_sample(value);
+                }
+            }
+        },
+        move |error| { let _ = failed.try_send(error.to_string()); },
+        None,
+    )
+}
 fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
@@ -1377,6 +1518,13 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
             }
             for frame in data.chunks_mut(channels) {
                 let sample = mixer.frame();
+                if let Some(queue) = &mixer.headphone_queue {
+                    if queue.len() > 4096 {
+                        while queue.len() > 1024 { let _ = queue.pop(); }
+                    }
+                    let cue = mixer.last_headphone_output;
+                    if queue.push(cue).is_err() { let _ = queue.pop(); let _ = queue.push(cue); }
+                }
                 recorder.push_with_mic(sample, mixer.last_mic_input);
                 for (channel, output) in frame.iter_mut().enumerate() {
                     let value = match channels {
@@ -1398,6 +1546,38 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn headphone_cue_hears_selected_deck_without_leaking_to_master() {
+        let mut mixer = Mixer::new(48_000);
+        let track = Arc::new(Track { samples: vec![[0.5, -0.25]; 4096], rate: 48_000, level_gain: 1. });
+        mixer.apply(Cmd::Load(1, track, [None; 8], false));
+        mixer.apply(Cmd::Toggle(1));
+        mixer.apply(Cmd::Cross(-1.));
+        mixer.apply(Cmd::HeadphoneTarget(1));
+        mixer.apply(Cmd::HeadphoneVolume(0.5));
+        assert_eq!(mixer.frame(), [0., 0.]);
+        assert_eq!(mixer.last_headphone_output, [0.25, -0.125]);
+        mixer.apply(Cmd::Master(0.));
+        mixer.apply(Cmd::Volume(1, 0.));
+        assert_eq!(mixer.frame(), [0., 0.]);
+        assert_eq!(mixer.last_headphone_output, [0.25, -0.125]);
+        mixer.apply(Cmd::HeadphoneTarget(0));
+        mixer.frame();
+        assert_eq!(mixer.last_headphone_output, [0., 0.]);
+    }
+    #[test]
+    fn headphone_reader_resamples_stereo_and_silences_underruns() {
+        let queue = ArrayQueue::new(256);
+        for _ in 0..96 { queue.push([0.4, -0.2]).unwrap(); }
+        let mut reader = CueReader::new(44_100, 48_000);
+        for _ in 0..96 {
+            let sample = reader.frame(&queue);
+            assert!(sample.iter().all(|x| x.is_finite()));
+            assert!(sample[0] >= 0. && sample[1] <= 0.);
+        }
+        for _ in 0..256 { assert!(reader.frame(&queue).iter().all(|x| x.is_finite())); }
+        assert_eq!(reader.frame(&queue), [0., 0.]);
+    }
     #[test]
     fn microphone_channel_mapping_preserves_mono_and_all_input_pairs() {
         assert_eq!(mic_frame(&[0.25f32]), [0.25, 0.25]);

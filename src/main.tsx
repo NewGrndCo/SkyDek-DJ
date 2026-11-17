@@ -98,6 +98,7 @@ type Snapshot = {
   error: string;
   device: string;
   mic_status: string;
+  headphone_status: string;
   sample_rate: number;
   tab: string;
   recording: boolean;
@@ -669,10 +670,14 @@ function App() {
               onChange={(e) => cmd("master", undefined, +e.target.value)}
             />
           </label>
-          <label>
-            SAMPLER LEVEL
-            <input type="range" min="0" max="1" step="0.01" value={s?.preferences.sampler_volume ?? 0.8} onChange={(e) => cmd("sampler_volume", undefined, +e.target.value)} />
-          </label>
+          <div className="cue-levels">
+            <label>SAMPLER
+              <input aria-label="Sampler level" type="range" min="0" max="1" step="0.01" value={s?.preferences.sampler_volume ?? 0.8} onChange={(e) => cmd("sampler_volume", undefined, +e.target.value)} />
+            </label>
+            <label title={s?.headphone_status || "Select a separate headphone output in Audio settings"}>HEADPHONES
+              <input aria-label="Headphone volume" type="range" min="0" max="1" step="0.01" value={s?.preferences.headphone_volume ?? 0.8} disabled={!s?.preferences.headphone_device} onChange={(e) => cmd("headphone_volume", undefined, +e.target.value)} />
+            </label>
+          </div>
           <div className="mic-controls">
             <label>MIC<input aria-label="Microphone level" type="range" min="0" max="1" step="0.01" value={s?.preferences.mic_volume ?? 0.8} onChange={(e) => cmd("mic_volume", undefined, +e.target.value)} /></label>
             <button className={(s?.preferences.mic_mute ?? false) ? "active" : ""} onClick={()=>cmd("mic_mute",undefined,s?.preferences.mic_mute?0:1)}>MUTE</button>
@@ -683,7 +688,7 @@ function App() {
             {(s?.audio.peak || 0) > 1 ? "CLIPPING" : "MASTER OUTPUT"}
           </small>
           <div className="targets">
-            <span className="caption">TARGET DECK</span>
+            <span className="caption">TARGET DEK · HEADPHONE CUE</span>
             <div>
               {[0, 1].map((i) => (
                 <button
@@ -1085,6 +1090,7 @@ function App() {
           sensitivity={s.sensitivity}
           device={s.device}
           micStatus={s.mic_status}
+          headphoneStatus={s.headphone_status}
           rate={s.sample_rate}
           command={cmd}
           resetLayout={panelLayout.reset}

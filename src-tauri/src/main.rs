@@ -154,6 +154,7 @@ struct AppState {
     views: Arc<ArrayQueue<View>>,
     error: Arc<Mutex<String>>,
     mic_status: Arc<Mutex<String>>,
+    headphone_status: Arc<Mutex<String>>,
     path: PathBuf,
     device: String,
     rate: u32,
@@ -187,6 +188,7 @@ struct Snapshot {
     device: String,
     sample_rate: u32,
     mic_status: String,
+    headphone_status: String,
     tab: String,
     recording: bool,
     recorded_seconds: f64,
@@ -579,6 +581,10 @@ impl AppState {
                 m.session.preferences.mic_volume = v.clamp(0., 1.);
                 self.send(Cmd::MicVolume(m.session.preferences.mic_volume as f32))?;
             }
+            "headphone_volume" => {
+                m.session.preferences.headphone_volume = v.clamp(0., 1.);
+                self.send(Cmd::HeadphoneVolume(m.session.preferences.headphone_volume as f32))?;
+            }
             "mic_mute" => {
                 m.session.preferences.mic_mute = v != 0.;
                 self.send(Cmd::MicMute(m.session.preferences.mic_mute))?;
@@ -591,8 +597,8 @@ impl AppState {
                 m.session.preferences.linear_curve = v > 0.;
                 self.send(Cmd::Linear(m.session.preferences.linear_curve))?;
             }
-            "target" => m.target = Some(d),
-            "auto_target" => m.target = None,
+            "target" => { m.target = Some(d); self.send(Cmd::HeadphoneTarget(d))?; },
+            "auto_target" => { m.target = None; self.send(Cmd::HeadphoneTarget(target(&m)))?; },
             "shift" => m.shift = !m.shift,
             "select" => {
                 m.tab = "library".into();
@@ -875,6 +881,7 @@ fn snapshot(s: tauri::State<Arc<AppState>>, library_revision: Option<u32>) -> Sn
         device: s.device.clone(),
         sample_rate: s.rate,
         mic_status: s.mic_status.lock().unwrap().clone(),
+        headphone_status: s.headphone_status.lock().unwrap().clone(),
         tab: m.tab.clone(),
         recording,
         recorded_seconds: s.recorder.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
@@ -1723,6 +1730,17 @@ fn audio_devices() -> Result<Vec<String>, String> {
 #[tauri::command]
 fn mic_devices() -> Result<Vec<String>, String> { audio::input_devices() }
 #[tauri::command]
+fn select_headphone_device(s: tauri::State<Arc<AppState>>, device: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
+    if s.recorder.is_open() { return Err("Stop recording before changing headphone output".into()); }
+    if let Some(name) = &device {
+        if !audio::output_devices()?.contains(name) { return Err("Selected headphone output is unavailable. Refresh the device list.".into()); }
+        if name == &s.device { return Err("Choose a separate output for headphones and the main mix.".into()); }
+    }
+    let old = { let mut m = s.model.lock().unwrap(); std::mem::replace(&mut m.session.preferences.headphone_device, device) };
+    if let Err(error) = s.save() { s.model.lock().unwrap().session.preferences.headphone_device = old; return Err(error); }
+    app.restart();
+}
+#[tauri::command]
 fn select_mic_device(s: tauri::State<Arc<AppState>>, device: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
     if s.recorder.is_open() { return Err("Stop recording before changing microphone input".into()); }
     if let Some(name) = &device { if !audio::input_devices()?.contains(name) { return Err("Selected microphone is unavailable".into()); } }
@@ -1745,6 +1763,9 @@ fn select_audio_device(
             return Err(
                 "This audio output is no longer connected. Refresh the device list.".into(),
             );
+        }
+        if s.model.lock().unwrap().session.preferences.headphone_device.as_ref() == Some(name) {
+            return Err("Choose a different headphone output before using it for the main mix.".into());
         }
     }
     let old = {
@@ -1842,10 +1863,13 @@ fn worker(s: Arc<AppState>) {
         let mut last_mapping: Option<(bool, mapping::Mappings)> = None;
         let mut last_axes: [Option<f32>; 4] = [None; 4];
         let mut trigger_down = [false; 2];
+        let mut cue_target = 0;
         loop {
             while let Some(v) = s.views.pop() {
                 let mut m = s.model.lock().unwrap();
                 m.view = v.clone();
+                let selected = target(&m);
+                if selected != cue_target && s.send(Cmd::HeadphoneTarget(selected)).is_ok() { cue_target = selected; }
                 if s.recorder.is_open() {
                     let seconds = s.recorder.frames.load(std::sync::atomic::Ordering::Relaxed)
                         as f64
@@ -2204,21 +2228,27 @@ fn main() {
                 session.preferences.sampler_volume as f32,
             ));
             let _ = commands.push(Cmd::MicVolume(session.preferences.mic_volume as f32));
+            let _ = commands.push(Cmd::HeadphoneVolume(session.preferences.headphone_volume as f32));
             let _ = commands.push(Cmd::MicMute(session.preferences.mic_mute));
             let _ = commands.push(Cmd::MicDucking(session.preferences.mic_ducking));
             let _ = commands.push(Cmd::Linear(session.preferences.linear_curve));
             let views = Arc::new(ArrayQueue::new(16));
             let error = Arc::new(Mutex::new(session_warning));
             let mic_status = Arc::new(Mutex::new("Connecting microphone…".to_string()));
+            let headphone_status = Arc::new(Mutex::new("Connecting headphones…".to_string()));
             let recorder = recording::Recorder::new();
             let (device, rate) = audio::start_on_device(
                 commands.clone(),
                 views.clone(),
                 error.clone(),
                 recorder.clone(),
-                session.preferences.audio_device.as_deref(),
-                session.preferences.mic_device.as_deref(),
-                mic_status.clone(),
+                audio::AudioRouting {
+                    output: session.preferences.audio_device.as_deref(),
+                    mic: session.preferences.mic_device.as_deref(),
+                    headphones: session.preferences.headphone_device.as_deref(),
+                    mic_status: mic_status.clone(),
+                    headphone_status: headphone_status.clone(),
+                },
             )
             .or_else(|cause| {
                 if session.preferences.audio_device.is_none() {
@@ -2229,9 +2259,13 @@ fn main() {
                     views.clone(),
                     error.clone(),
                     recorder.clone(),
-                    None,
-                    session.preferences.mic_device.as_deref(),
-                    mic_status.clone(),
+                    audio::AudioRouting {
+                        output: None,
+                        mic: session.preferences.mic_device.as_deref(),
+                        headphones: session.preferences.headphone_device.as_deref(),
+                        mic_status: mic_status.clone(),
+                        headphone_status: headphone_status.clone(),
+                    },
                 )?;
                 let mut warning = error.lock().unwrap();
                 if !warning.is_empty() {
@@ -2280,6 +2314,7 @@ fn main() {
                 views,
                 error,
                 mic_status,
+                headphone_status,
                 path,
                 device,
                 rate,
@@ -2387,6 +2422,7 @@ fn main() {
             controller_input,
             audio_devices,
             mic_devices,
+            select_headphone_device,
             select_mic_device,
             select_audio_device,
             toggle_fullscreen,
@@ -2492,6 +2528,7 @@ mod integration_tests {
             views: Arc::new(ArrayQueue::new(16)),
             error: Arc::new(Mutex::new(String::new())),
             mic_status: Arc::new(Mutex::new(String::new())),
+            headphone_status: Arc::new(Mutex::new(String::new())),
             path: root.join("session.json"),
             device: String::new(),
             rate: 48000,

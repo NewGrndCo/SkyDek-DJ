@@ -2,19 +2,20 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 export type Preferences = {
   sampler_modes: ("restart" | "toggle" | "overlap" | "hold")[];
-  cue_seconds: number; crossfade_seconds: number; audio_device: string | null; mic_device: string | null; sampler_volume: number; mic_volume: number; mic_mute: boolean; mic_ducking: boolean; linear_curve: boolean;
+  cue_seconds: number; crossfade_seconds: number; audio_device: string | null; headphone_device: string | null; headphone_volume: number; mic_device: string | null; sampler_volume: number; mic_volume: number; mic_mute: boolean; mic_ducking: boolean; linear_curve: boolean;
   auto_dj_seconds: number; auto_dj_source: string; library_monitor:boolean; library_scan_minutes:number; auto_dj_crossfade_seconds:number; auto_dj_sample_count:number; auto_dj_sample_spacing:number; auto_dj_random_samples: boolean; normalize_tracks: boolean; effect_toggle: boolean;
   profiles: Record<string, import("./MapperPanel").Mappings>; active_profile: string;
 };
 export type GeneralSettingsProps = {
-  preferences: Preferences; sensitivity: number; device: string; micStatus: string; rate: number;
+  preferences: Preferences; sensitivity: number; device: string; micStatus: string; headphoneStatus: string; rate: number;
   command: (action: string, deck?: number, value?: number) => Promise<void>;
   resetLayout: () => void;
   section?: "general" | "audio" | "controller" | "autodj";
 };
-export function GeneralSettings({ preferences, sensitivity, device, micStatus, rate, command, resetLayout, section }: GeneralSettingsProps) {
+export function GeneralSettings({ preferences, sensitivity, device, micStatus, headphoneStatus, rate, command, resetLayout, section }: GeneralSettingsProps) {
   const [devices, setDevices] = useState<string[]>([]), [selected, setSelected] = useState(preferences.audio_device || ""),
     [micDevices, setMicDevices] = useState<string[]>([]), [selectedMic, setSelectedMic] = useState(preferences.mic_device || ""),
+    [selectedHeadphones, setSelectedHeadphones] = useState(preferences.headphone_device || ""),
     [message, setMessage] = useState(""), [applying, setApplying] = useState(false);
   async function refresh() {
     try { const [outputs, inputs] = await Promise.all([invoke<string[]>("audio_devices"), invoke<string[]>("mic_devices")]); setDevices(outputs); setMicDevices(inputs); }
@@ -23,6 +24,7 @@ export function GeneralSettings({ preferences, sensitivity, device, micStatus, r
   useEffect(() => { if (!section || section === "audio") void refresh(); }, [section]);
   useEffect(() => { setSelected(preferences.audio_device || ""); }, [preferences.audio_device]);
   useEffect(() => { setSelectedMic(preferences.mic_device || ""); }, [preferences.mic_device]);
+  useEffect(() => { setSelectedHeadphones(preferences.headphone_device || ""); }, [preferences.headphone_device]);
   const runCommand: typeof command = async (...args) => {
     try { await command(...args); } catch (error) { setMessage(String(error)); }
   };
@@ -42,6 +44,20 @@ export function GeneralSettings({ preferences, sensitivity, device, micStatus, r
       catch(e) { setMessage(String(e)); setApplying(false); }
     }}>Apply output & restart</button></div>
     <small>Connect your audio interface, refresh, then choose its output. Changing output currently requires an application restart.</small>
+    <h3>Headphone cue</h3>
+    <p role="status">{headphoneStatus || "Headphone output status unavailable"}</p>
+    <label>Headphone output <select aria-label="Headphone output device" value={selectedHeadphones} onChange={e => setSelectedHeadphones(e.target.value)}>
+      <option value="">Off</option>
+      {preferences.headphone_device && !devices.includes(preferences.headphone_device) && <option value={preferences.headphone_device}>{preferences.headphone_device} (unavailable)</option>}
+      {devices.map(name => <option key={name} value={name} disabled={name === device}>{name}{name === device ? " (main output)" : ""}</option>)}
+    </select></label>
+    <button disabled={applying} onClick={async () => {
+      if (!window.confirm("Apply this headphone output and restart SkyDek DJ? Playback will stop. Library and mappings will be saved.")) return;
+      setApplying(true);
+      try { await invoke("select_headphone_device", { device: selectedHeadphones || null }); }
+      catch(e) { setMessage(String(e)); setApplying(false); }
+    }}>Apply headphones &amp; restart</button>
+    <small>Choose a separate output from the main speakers. The controller headset jack appears here only when your computer exposes it as an audio output. The selected DEK is sent to headphones before the crossfader and master level.</small>
     <h3>Microphone</h3>
     <p role="status">{micStatus || "Microphone status unavailable"}</p>
     <label>Input device <select aria-label="Microphone input device" value={selectedMic} onChange={e => setSelectedMic(e.target.value)}>
