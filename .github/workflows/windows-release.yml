@@ -38,11 +38,11 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: SkyDek DJ ${{ github.ref_name }}
           releaseBody: |
-            SkyDek DJ 0.10.20 adds the new official application and project icons, Mix Editor reliability and keyboard improvements, microphone stem capture for new recordings, controller callouts, and audio and Auto DJ fixes.
+            SkyDek DJ 0.10.21 adds one universal macOS installer alongside Windows, with the same DJ interface, controller mapping, recording, Mix Editor, and signed in-app update feed.
 
-            Existing installations can install this signed update from Check for updates.
+            Choose the Windows installer or the macOS DMG from the release assets. Existing official installations can check for signed updates in the app.
 
-            Physical microphone, controller, display scaling, and long-mix performance checks remain recommended before a live set.
+            The Mac build uses ad-hoc Apple code signing. macOS may ask users to allow the app in Privacy & Security on first launch. Physical microphone, controller, display scaling, and long-mix performance checks remain recommended before a live set.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

@@ -1,33 +1,67 @@
-name: Build macOS installer
+name: Build and publish universal macOS installer
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing official release tag; leave blank to validate without publishing
+        required: false
+        type: string
 
 jobs:
   build-macos:
     runs-on: macos-latest
     permissions:
       contents: write
+    env:
+      SKYDEK_MAC_UNIVERSAL: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - name: Install JavaScript dependencies
         run: npm ci
-      - name: Build macOS DMG
-        uses: tauri-apps/tauri-action@v0
+      - name: Validate macOS metadata
+        run: plutil -lint src-tauri/Info.plist
+      - name: Prepare universal MP3 encoder
+        run: npm run build:encoder
+      - name: Test UI logic
+        run: npm run test:ui
+      - name: Build frontend
+        run: npm run build
+      - name: Test Rust backend on macOS
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build universal DMG and signed updater
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: SkyDek DJ ${{ github.ref_name }}
-          releaseBody: macOS installer for SkyDek DJ.
-          releaseDraft: true
+          tagName: ${{ inputs.release_tag }}
+          releaseName: ${{ inputs.release_tag && format('SkyDek DJ {0}', inputs.release_tag) || '' }}
+          releaseDraft: false
           prerelease: false
-          args: --bundles dmg
+          uploadUpdaterJson: true
+          args: --bundles dmg --target universal-apple-darwin
+      - name: Verify bundled Mac resources and architecture
+        run: |
+          app="$(find src-tauri/target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$app"
+          test -f "$app/Contents/Resources/resources/encoder/skydek-mp3-encoder"
+          test -f "$app/Contents/Resources/project.icns"
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist")"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeIconFile' "$app/Contents/Info.plist")" = "project.icns"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/skydek-dj"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/Resources/resources/encoder/skydek-mp3-encoder"
+          codesign --verify --deep "$app"

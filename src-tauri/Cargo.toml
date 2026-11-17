@@ -1,8 +1,8 @@
 [package]
 name = "skydek-dj"
-version = "0.10.20"
+version = "0.10.21"
 edition = "2021"
-authors = ["New Ground Enterprise"]
+authors = ["New Ground Media"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 [dependencies]

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>SkyDek DJ uses your microphone for live mixing and recordings when you enable the mic.</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>SkyDek Mix Session</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>CFBundleTypeExtensions</key><array><string>dek</string></array>
+      <key>CFBundleTypeIconFile</key><string>project.icns</string>
+      <key>LSHandlerRank</key><string>Default</string>
+    </dict>
+  </array>
+</dict>
+</plist>

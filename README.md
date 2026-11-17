@@ -2,13 +2,15 @@
 
 ## Platform support
 
-SkyDek DJ supports Windows and macOS. Windows installers use the NSIS package. macOS builds are produced on an Apple-hosted GitHub Actions runner as a native `.dmg`, because Apple’s packaging and signing toolchain is required for a distributable Mac application. On macOS, run `npm run package:mac` to build locally, or push a version tag to use the included workflow.
+SkyDek DJ supports Windows and macOS. The [latest release](https://github.com/NewGrndCo/SkyDek-DJ/releases/latest) provides a Windows NSIS installer and a universal macOS DMG for Apple Silicon and Intel Macs. The DMG presents the app icon for dragging into Applications. The Mac build is ad-hoc signed; first launch may require allowing the app in macOS Privacy & Security. Apple Developer ID notarization is not yet configured.
+
+Landing pages can request the [latest GitHub release metadata](https://api.github.com/repos/NewGrndCo/SkyDek-DJ/releases/latest) and select the `.exe` or `.dmg` asset by file extension. This keeps platform download buttons on the newest release without embedding a version number.
 
 SkyDek DJ is a standalone desktop DJ workstation by New Ground Media. It supports Windows and macOS and does not require VirtualDJ or loopMIDI.
 
 ## Current Windows release
 
-The current official release is **0.10.20**. Existing signed Windows installations can use **Check for updates** to install it. See [0.10.20 update notes](docs/UPDATE-0.10.20.md).
+The current official release is **0.10.21** for Windows and macOS. Existing official installations can use **Check for updates** after the signed updater artifacts for their platform are published. See [0.10.21 update notes](docs/UPDATE-0.10.21.md).
 
 ## Development and verification
 

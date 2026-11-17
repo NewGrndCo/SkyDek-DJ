@@ -19,6 +19,17 @@ pub(crate) struct Mp3Process {
     input: Option<BufWriter<std::process::ChildStdin>>,
     stderr: Option<std::thread::JoinHandle<String>>,
 }
+
+fn bundled_encoder_path(executable: &Path, encoder_name: &str, macos: bool) -> Result<PathBuf, String> {
+    let executable_dir = executable.parent().ok_or("Executable has no parent")?;
+    let resources = if macos {
+        executable_dir.parent().ok_or("macOS application bundle has no Contents directory")?.join("Resources")
+    } else {
+        executable_dir.to_path_buf()
+    };
+    Ok(resources.join("resources").join("encoder").join(encoder_name))
+}
+
 impl Mp3Process {
     pub(crate) fn create(path: &Path, rate: u32) -> Result<Self, String> {
         let encoder_name = if cfg!(windows) {
@@ -26,11 +37,11 @@ impl Mp3Process {
         } else {
             "skydek-mp3-encoder"
         };
-        let installed = std::env::current_exe()
-            .map_err(|e| e.to_string())?
-            .parent()
-            .ok_or("Executable has no parent")?
-            .join(format!("resources/encoder/{encoder_name}"));
+        let installed = bundled_encoder_path(
+            &std::env::current_exe().map_err(|e| e.to_string())?,
+            encoder_name,
+            cfg!(target_os = "macos"),
+        )?;
         let executable = if let Some(explicit) = std::env::var_os("SKYDEK_ENCODER_PATH") {
             let explicit = PathBuf::from(explicit);
             if !explicit.is_absolute() {
@@ -368,6 +379,14 @@ mod tests {
     };
 
     static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn bundled_encoder_resolves_from_each_platform_resource_directory() {
+        let windows = bundled_encoder_path(Path::new("C:/SkyDek/skydek-dj.exe"), "skydek-mp3-encoder.exe", false).unwrap();
+        assert_eq!(windows, Path::new("C:/SkyDek/resources/encoder/skydek-mp3-encoder.exe"));
+        let mac = bundled_encoder_path(Path::new("/Applications/SkyDek DJ.app/Contents/MacOS/skydek-dj"), "skydek-mp3-encoder", true).unwrap();
+        assert_eq!(mac, Path::new("/Applications/SkyDek DJ.app/Contents/Resources/resources/encoder/skydek-mp3-encoder"));
+    }
 
     struct TestFile(PathBuf);
     impl TestFile {
