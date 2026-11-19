@@ -24,7 +24,9 @@ pub fn level_gain(samples: &[[f32; 2]]) -> f32 {
     if rms < 0.005 {
         return 1.;
     }
-    (0.14 / rms).clamp(0.5, 2.5).min(0.95 / peak.max(0.001))
+    // Raise quiet material, but do not turn down already mastered tracks just
+    // because their RMS exceeds the target. Leave peak headroom for the mixer.
+    (0.22 / rms).clamp(1., 2.5).min(0.98 / peak.max(0.001))
 }
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TrackInfo {
@@ -505,6 +507,7 @@ pub struct Mixer {
     mic_mute: bool,
     mic_ducking: bool,
     mic_duck_gain: f32,
+    limiter_gain: f32,
     headphone_target: usize,
     headphone_volume: f32,
     headphone_queue: Option<Arc<ArrayQueue<[f32; 2]>>>,
@@ -546,6 +549,7 @@ impl Mixer {
             mic_mute: false,
             mic_ducking: false,
             mic_duck_gain: 1.,
+            limiter_gain: 1.,
             headphone_target: 0,
             headphone_volume: 0.8,
             headphone_queue: None,
@@ -1103,6 +1107,18 @@ impl Mixer {
         }
         for x in &mut out {
             *x *= self.master;
+        }
+        // A fast peak guard prevents hard clipping when two full-level decks
+        // overlap. Release slowly so a single transient does not pump the mix.
+        let peak = out[0].abs().max(out[1].abs());
+        let target = if peak > 0.98 { 0.98 / peak } else { 1. };
+        if target < self.limiter_gain {
+            self.limiter_gain = target;
+        } else {
+            self.limiter_gain += (target - self.limiter_gain) / (self.rate as f32 * 0.25).max(1.);
+        }
+        for x in &mut out {
+            *x *= self.limiter_gain;
         }
         self.peak = (self.peak * 0.9995).max(out[0].abs().max(out[1].abs()));
         self.clock += 1;
@@ -1994,9 +2010,30 @@ mod tests {
         let quiet = level_gain(&vec![[0.04, -0.04]; 4096]);
         let loud = level_gain(&vec![[0.4, -0.4]; 4096]);
         assert!(quiet > loud);
-        assert!(0.04 * quiet <= 0.95);
-        assert!(0.4 * loud <= 0.95);
+        assert!(0.04 * quiet <= 0.98);
+        assert!(0.4 * loud <= 0.98);
+        assert!(loud >= 1., "mastered tracks should not lose several dB");
+        assert!(level_gain(&vec![[0.24, -0.24]; 4096]) >= 1.);
         assert_eq!(level_gain(&[]), 1.);
+    }
+    #[test]
+    fn peak_guard_prevents_two_decks_from_clipping() {
+        let mut mixer = Mixer::new(48_000);
+        for deck in 0..2 {
+            mixer.apply(Cmd::Load(deck, Arc::new(Track {
+                samples: vec![[0.95; 2]; 128], rate: 48_000, level_gain: 1.,
+            }), [None; 8], false));
+            mixer.apply(Cmd::Volume(deck, 1.));
+            mixer.apply(Cmd::Toggle(deck));
+        }
+        mixer.apply(Cmd::Master(1.));
+        let first = mixer.frame();
+        assert!(first.iter().all(|sample| sample.abs() <= 0.98));
+        assert!(first.iter().all(|sample| sample.abs() >= 0.97));
+        mixer.apply(Cmd::Toggle(1));
+        mixer.apply(Cmd::Cross(-1.));
+        for _ in 0..48_000 { mixer.frame(); }
+        assert!(mixer.limiter_gain > 0.99);
     }
     fn effect_mixer(rate: u32, samples: Vec<[f32; 2]>) -> Mixer {
         let mut m = Mixer::new(rate);
