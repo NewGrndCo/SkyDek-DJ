@@ -51,7 +51,7 @@ jobs:
           tagName: ${{ inputs.release_tag }}
           releaseName: ${{ inputs.release_tag && format('SkyDek DJ {0}', inputs.release_tag) || '' }}
           releaseBody: |
-            SkyDek DJ 0.10.21 includes installers for Windows and macOS, with the same DJ interface, controller mapping, recording, Mix Editor, and in-app update feed.
+            SkyDek DJ 0.10.22 improves deck loudness matching, guards the master against clipping, and adds separate headphone cue output and volume controls.
 
             Choose the Windows installer or the universal macOS DMG below. The Mac build uses ad-hoc Apple code signing, so macOS may ask you to allow the app in Privacy & Security on first launch.
           releaseDraft: false

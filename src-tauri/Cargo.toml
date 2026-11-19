@@ -1,6 +1,6 @@
 [package]
 name = "skydek-dj"
-version = "0.10.21"
+version = "0.10.22"
 edition = "2021"
 authors = ["New Ground Media"]
 [build-dependencies]
