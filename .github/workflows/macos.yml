@@ -51,7 +51,7 @@ jobs:
           tagName: ${{ inputs.release_tag }}
           releaseName: ${{ inputs.release_tag && format('SkyDek DJ {0}', inputs.release_tag) || '' }}
           releaseBody: |
-            SkyDek DJ 0.10.22 improves deck loudness matching, guards the master against clipping, and adds separate headphone cue output and volume controls.
+            SkyDek DJ 1.1.0 is the official public launch release, with the complete controller-ready two-deck workflow, sampler, recording, Mix Editor, Auto DJ, microphone controls, headphone cue output, and signed updates.
 
             Choose the Windows installer or the universal macOS DMG below. The Mac build uses ad-hoc Apple code signing, so macOS may ask you to allow the app in Privacy & Security on first launch.
           releaseDraft: false
